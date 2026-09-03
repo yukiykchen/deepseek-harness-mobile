@@ -2,6 +2,7 @@ package com.example.dsh
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
 import android.view.View
@@ -25,6 +26,7 @@ import com.example.dsh.module.KRDshEngineModule
 import com.example.dsh.module.KRDshRelayModule
 import com.example.dsh.module.KRDshWebSocketModule
 import com.example.dsh.module.KRDshSseModule
+import com.example.dsh.module.KRDshThemeModule
 import com.example.dsh.module.KRShareModule
 import com.tencent.kuiklybase.android.KRWebView
 import org.json.JSONObject
@@ -36,6 +38,9 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
     private lateinit var errorView: View
 
     private val kuiklyRenderViewDelegator = KuiklyRenderViewBaseDelegator(this)
+    private var currentIsDark = false
+    private var lastSystemDark = false
+    private var chromePaintedWithContainers = false
 
     private val pageName: String
         get() {
@@ -50,12 +55,49 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 在 inflate 布局之前就把窗口刷成解析后的主题色，避免深色模式下首帧白闪。
+        lastSystemDark = DshThemeChrome.systemIsDark(this)
+        currentIsDark = DshThemeChrome.resolveIsDark(this)
+        DshThemeChrome.apply(this, currentIsDark)
+
         setContentView(R.layout.activity_hr)
         setupImmersiveMode()
         hrContainerView = findViewById(R.id.hr_container)
         loadingView = findViewById(R.id.hr_loading)
         errorView = findViewById(R.id.hr_error)
+        applyThemeChrome(currentIsDark, forceContainers = true)
         kuiklyRenderViewDelegator.onAttach(hrContainerView, "", pageName, createPageData())
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val systemDark = DshThemeChrome.systemIsDark(this)
+        if (systemDark == lastSystemDark) return
+        lastSystemDark = systemDark
+        kuiklyRenderViewDelegator.sendEvent(
+            DshThemeChrome.THEME_DID_CHANGED,
+            mapOf(DshThemeChrome.IS_NIGHT_MODE_KEY to systemDark),
+        )
+        applyThemeChrome(DshThemeChrome.resolveIsDark(this))
+    }
+
+    fun reapplyThemeChrome() = applyThemeChrome(currentIsDark, forceContainers = true)
+
+    /** 由 [com.example.dsh.module.KRDshThemeModule] 在 Kuikly 侧切换主题后调用。 */
+    fun applyThemeChrome(isDark: Boolean, forceContainers: Boolean = false) {
+        val containersReady = ::hrContainerView.isInitialized
+        if (!forceContainers && currentIsDark == isDark && (!containersReady || chromePaintedWithContainers)) {
+            return
+        }
+        currentIsDark = isDark
+        // hr_loading / hr_error 叠在容器之上，必须保持透明，只给窗口与容器上色。
+        val containers = if (containersReady) {
+            arrayOf(window.decorView.findViewById(android.R.id.content), hrContainerView)
+        } else {
+            emptyArray()
+        }
+        DshThemeChrome.apply(this, isDark, *containers)
+        chromePaintedWithContainers = containersReady
     }
 
     override fun softInputMode(): Int? = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
@@ -103,6 +145,9 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
             moduleExport(KRDshSseModule.MODULE_NAME) {
                 KRDshSseModule()
             }
+            moduleExport(KRDshThemeModule.MODULE_NAME) {
+                KRDshThemeModule()
+            }
         }
     }
 
@@ -117,6 +162,9 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
         val param = argsToMap()
         param["appId"] = 1
         param["embeddedEngine"] = false
+        val systemDark = DshThemeChrome.systemIsDark(this)
+        lastSystemDark = systemDark
+        param[DshThemeChrome.IS_NIGHT_MODE_KEY] = systemDark
         param["databaseDir"] = java.io.File(KRApplication.application.filesDir.parentFile, "databases").apply {
             if (!exists()) mkdirs()
         }.absolutePath
@@ -131,13 +179,11 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
     private fun setupImmersiveMode() {
         window?.apply {
             addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-            window?.statusBarColor = Color.TRANSPARENT
-            window?.decorView?.systemUiVisibility =
+            statusBarColor = Color.TRANSPARENT
+            // 状态栏图标深浅由 DshThemeChrome.apply 按主题决定，这里只保留布局相关 flag。
+            decorView.systemUiVisibility = decorView.systemUiVisibility or
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
         }
-
     }
 
     companion object {

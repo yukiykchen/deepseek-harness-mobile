@@ -1,6 +1,8 @@
-import { ErrorReason, KRRecord, Kuikly, KuiklyRenderBaseView } from '@kuikly-open/render';
+import { ErrorReason, KRRecord, Kuikly } from '@kuikly-open/render';
+import { common } from '@kit.AbilityKit';
 import router from '@ohos.router';
 import { KuiklyViewDelegate } from '../kuikly/KuiklyViewDelegate';
+import { DshThemeChrome } from '../kuikly/DshThemeChrome';
 import globalNativeManager from '../kuikly/MyNativeManager';
 
 @Entry
@@ -8,7 +10,7 @@ import globalNativeManager from '../kuikly/MyNativeManager';
 struct Index {
   kuiklyViewDelegate = new KuiklyViewDelegate();
   pageName?: string;
-  pageData?: KRRecord;
+  pageData: KRRecord = {};
   @State exception?: string = "";
 
   aboutToAppear() {
@@ -16,14 +18,19 @@ struct Index {
 
     const params = router.getParams() as Record<string, Object>;
     this.pageName = params?.pageName as string;
-    this.pageData = params?.pageData as KRRecord;
+    const incoming: KRRecord | undefined = params?.pageData as KRRecord;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const systemDark = DshThemeChrome.systemIsDark(context);
+    DshThemeChrome.attachPager(this.kuiklyViewDelegate);
+    DshThemeChrome.seedSystemDark(systemDark);
+    this.pageData = { ...(incoming ?? {}), 'isNightMode': systemDark };
   }
 
   build() {
     Stack() {
         Kuikly({
         pagerName: this.pageName ?? 'connection_setup',
-        pagerData: this.pageData ?? {},
+        pagerData: this.pageData,
         delegate: this.kuiklyViewDelegate,
         nativeManager: globalNativeManager,
         onRenderException: (exception: Error, reason: ErrorReason) => {

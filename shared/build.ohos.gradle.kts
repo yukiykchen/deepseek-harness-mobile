@@ -48,7 +48,10 @@ kotlin {
                 implementation("com.tencent.kuikly-open:core:${Version.getKuiklyOhosVersion()}")
                 implementation("com.tencent.kuikly-open:core-annotations:${Version.getKuiklyOhosVersion()}")
                 implementation("com.tencent.kuiklybase:KuiklyMarkdown:1.0.6-2.0.21-ohos")
-                implementation("com.tencent.kuiklybase:KuiklyWebview:1.0.2-2.0.21-KBA-010")
+                implementation("org.jetbrains.kotlinx:atomicfu:0.23.2.KBA-001")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:2.0.21-coroutines-KBA-001")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.7.1-KBA-003")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1-KBA-003")
 
             }
         }

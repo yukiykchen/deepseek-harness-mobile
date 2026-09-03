@@ -1,11 +1,12 @@
+import { Configuration, UIAbility } from '@kit.AbilityKit';
 import AbilityConstant from '@ohos.app.ability.AbilityConstant';
 import hilog from '@ohos.hilog';
-import UIAbility from '@ohos.app.ability.UIAbility';
 import Want from '@ohos.app.ability.Want';
 import window from '@ohos.window';
 import { KuiklyRenderAdapterManager } from '@kuikly-open/render';
 import { LogAdapter } from '../kuikly/adapter/LogAdapter';
 import { RouterAdapter } from '../kuikly/adapter/RouterAdapter';
+import { DshThemeChrome } from '../kuikly/DshThemeChrome';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -17,9 +18,12 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    // Main window is created, set main page for this ability
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
-    windowStage.getMainWindowSync().setWindowLayoutFullScreen(true);
+    const win = windowStage.getMainWindowSync();
+    win.setWindowLayoutFullScreen(true);
+    DshThemeChrome.attachWindow(win);
+    DshThemeChrome.seedSystemDark(DshThemeChrome.systemIsDark(this.context));
+    DshThemeChrome.applyResolved(this.context);
 
     KuiklyRenderAdapterManager.krLogAdapter = new LogAdapter();
     KuiklyRenderAdapterManager.krRouterAdapter = new RouterAdapter();
@@ -33,18 +37,20 @@ export default class EntryAbility extends UIAbility {
     });
   }
 
+  onConfigurationUpdate(newConfig: Configuration): void {
+    DshThemeChrome.onConfigurationUpdate(newConfig, this.context);
+  }
+
   onWindowStageDestroy(): void {
-    // Main window is destroyed, release UI related resources
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
   }
 
   onForeground(): void {
-    // Ability has brought to foreground
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onForeground');
+    DshThemeChrome.applyResolved(this.context);
   }
 
   onBackground(): void {
-    // Ability has back to background
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onBackground');
   }
 }

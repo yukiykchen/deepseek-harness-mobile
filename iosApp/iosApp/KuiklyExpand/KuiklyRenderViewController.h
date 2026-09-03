@@ -10,6 +10,7 @@ NS_ASSUME_NONNULL_BEGIN
  * @return 返回KuiklyRenderViewController实例
  */
 - (instancetype)initWithPageName:(NSString *)pageName pageData:(NSDictionary *)pageData;
+- (void)applyThemeChrome:(BOOL)isDark;
 @end
 
 NS_ASSUME_NONNULL_END

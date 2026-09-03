@@ -2,6 +2,7 @@ package com.example.dsh.dsh
 
 import com.example.dsh.base.BasePager
 import com.example.dsh.base.bridgeModule
+import com.example.dsh.theme.tokens
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.*
 import com.tencent.kuikly.core.directives.vif
@@ -248,6 +249,7 @@ internal class DshHomePage : BasePager() {
     private var connectionLabel by observable("本地内核启动中")
     private var apiKeyDraft by observable("")
     private var credentialSetupVisible by observable(false)
+    private var appearanceVisible by observable(false)
     private var credentialSetupBusy by observable(false)
     private var credentialSetupError by observable("")
     private var credentialSetupTitle by observable("添加一个 API Key 开始使用")
@@ -386,7 +388,8 @@ internal class DshHomePage : BasePager() {
                 attr {
                     flex(1f)
                     flexDirectionColumn()
-                    backgroundColor(Color(BG))
+                    autoDarkEnable(false)
+                    backgroundColor(tokens.background)
                     paddingTop(pagerData.statusBarHeight)
                 }
 
@@ -424,7 +427,7 @@ internal class DshHomePage : BasePager() {
                             attr {
                                 flex(1f)
                                 flexDirectionRow()
-                                backgroundColor(Color(BG))
+                                backgroundColor(tokens.background)
                             }
                             vif({ ctx.isRemoteHost }) {
                                 DshSessionRail(
@@ -646,7 +649,7 @@ internal class DshHomePage : BasePager() {
                         View {
                             attr {
                                 absolutePositionAllZero()
-                                backgroundColor(Color(0x55000000))
+                                backgroundColor(tokens.scrim)
                                 opacity(if (ctx.sessionDrawerMaskAnimated) 1f else 0f)
                                 animation(ctx.sessionDrawerMaskAnimation, ctx.sessionDrawerMaskAnimated)
                             }
@@ -664,6 +667,7 @@ internal class DshHomePage : BasePager() {
                         animated = { ctx.sessionDrawerAnimated },
                         onClose = { ctx.closeSessionDrawer() },
                         onOpenSettings = { ctx.openConnectionSettings() },
+                        onOpenAppearance = { ctx.appearanceVisible = true },
                         onNewSession = { ctx.createSession() },
                         onSelect = { id ->
                             ctx.closeSessionDrawer()
@@ -671,6 +675,13 @@ internal class DshHomePage : BasePager() {
                                 ctx.selectSession(id)
                             }
                         },
+                    )
+                }
+
+                vif({ ctx.appearanceVisible }) {
+                    DshAppearanceModal(
+                        onSelect = { ctx.setThemePreference(it) },
+                        onClose = { ctx.appearanceVisible = false },
                     )
                 }
 
@@ -750,7 +761,7 @@ internal class DshHomePage : BasePager() {
                             allCenter()
                             paddingLeft(20f)
                             paddingRight(20f)
-                            backgroundColor(Color(0x66000000))
+                            backgroundColor(tokens.scrim)
                         }
                         View {
                             attr {
@@ -758,31 +769,31 @@ internal class DshHomePage : BasePager() {
                                 maxWidth(420f)
                                 padding(20f)
                                 borderRadius(16f)
-                                backgroundColor(Color.WHITE)
+                                backgroundColor(tokens.surface)
                             }
-                            Text { attr { text("重命名工作区"); fontSize(18f); fontWeightBold(); color(Color(0xFF1F2933)) } }
+                            Text { attr { text("重命名工作区"); fontSize(18f); fontWeightBold(); color(tokens.primaryText) } }
                             Input {
                                 attr {
                                     height(38f)
                                     marginTop(14f)
                                     fontSize(14f)
                                     placeholder("工作区名称")
-                                    placeholderColor(Color(0xFF98A1A9))
+                                    placeholderColor(tokens.tertiaryText)
                                     text(ctx.workspaceRenameDraft)
                                 }
                                 event { textDidChange { ctx.workspaceRenameDraft = it.text } }
                             }
                             vif({ ctx.workspaceActionError.isNotEmpty() }) {
-                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
+                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(tokens.error.foreground) } }
                             }
                             View {
                                 attr { height(40f); marginTop(18f); flexDirectionRow(); justifyContentFlexEnd() }
                                 Text {
-                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(Color(0xFF7A838A)) }
+                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(tokens.secondaryText) }
                                     event { click { ctx.workspaceRenameTargetId = ""; ctx.workspaceActionError = "" } }
                                 }
                                 Text {
-                                    attr { text(if (ctx.workspaceActionBusy) "保存中..." else "保存"); width(78f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(Color(0xFF4176E6)) }
+                                    attr { text(if (ctx.workspaceActionBusy) "保存中..." else "保存"); width(78f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(tokens.primary) }
                                     event { click { if (!ctx.workspaceActionBusy) ctx.saveWorkspaceRename() } }
                                 }
                             }
@@ -796,7 +807,7 @@ internal class DshHomePage : BasePager() {
                             allCenter()
                             paddingLeft(20f)
                             paddingRight(20f)
-                            backgroundColor(Color(0x66000000))
+                            backgroundColor(tokens.scrim)
                         }
                         View {
                             attr {
@@ -804,29 +815,29 @@ internal class DshHomePage : BasePager() {
                                 maxWidth(420f)
                                 padding(20f)
                                 borderRadius(16f)
-                                backgroundColor(Color.WHITE)
+                                backgroundColor(tokens.surface)
                             }
-                            Text { attr { text("删除工作区注册?"); fontSize(18f); fontWeightBold(); color(Color(0xFF1F2933)) } }
+                            Text { attr { text("删除工作区注册?"); fontSize(18f); fontWeightBold(); color(tokens.primaryText) } }
                             Text {
                                 attr {
                                     text("只会从列表移除注册，不会删除目录、会话或日志。")
                                     marginTop(8f)
                                     fontSize(13f)
                                     lineHeight(20f)
-                                    color(Color(0xFF68737D))
+                                    color(tokens.secondaryText)
                                 }
                             }
                             vif({ ctx.workspaceActionError.isNotEmpty() }) {
-                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
+                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(tokens.error.foreground) } }
                             }
                             View {
                                 attr { height(40f); marginTop(18f); flexDirectionRow(); justifyContentFlexEnd() }
                                 Text {
-                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(Color(0xFF7A838A)) }
+                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(tokens.secondaryText) }
                                     event { click { ctx.workspaceDeleteTargetId = ""; ctx.workspaceActionError = "" } }
                                 }
                                 Text {
-                                    attr { text(if (ctx.workspaceActionBusy) "删除中..." else "删除注册"); width(112f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(Color(0xFFD25A5A)) }
+                                    attr { text(if (ctx.workspaceActionBusy) "删除中..." else "删除注册"); width(112f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(tokens.error.foreground) }
                                     event { click { if (!ctx.workspaceActionBusy) ctx.confirmWorkspaceDelete() } }
                                 }
                             }
@@ -2371,18 +2382,14 @@ internal class DshHomePage : BasePager() {
             showCredentialSetupIfNeeded("")
             return
         }
-        localReadScope.launch {
-            val apiKey = runCatching { store.loadApiKey() }.getOrDefault("")
-            setTimeout(pagerId, 0) {
-                pendingApiKey = apiKey
-                if (sshMode) {
-                    connectionLabel = "等待 SSH 连接"
-                } else if (apiKey.isEmpty()) {
-                    showCredentialSetupIfNeeded(apiKey)
-                } else if (engineReady && repository == null && connectionMode == DshConnectionMode.LOCAL) {
-                    connectLocalEngine(apiKey)
-                }
-            }
+        val apiKey = runCatching { store.loadApiKey() }.getOrDefault("")
+        pendingApiKey = apiKey
+        if (sshMode) {
+            connectionLabel = "等待 SSH 连接"
+        } else if (apiKey.isEmpty()) {
+            showCredentialSetupIfNeeded(apiKey)
+        } else if (engineReady && repository == null && connectionMode == DshConnectionMode.LOCAL) {
+            connectLocalEngine(apiKey)
         }
     }
 
@@ -3255,7 +3262,6 @@ internal class DshHomePage : BasePager() {
     }
 
     companion object {
-        private const val BG = 0xFFF7F9FA
         private const val LOCAL_ENGINE_URL = "http://127.0.0.1:3080"
         private const val ENGINE_CONNECT_RETRIES = 60
         private const val ENGINE_RETRY_DELAY_MS = 1_000
@@ -3288,7 +3294,7 @@ private fun ViewContainer<*, *>.DshConnectionSettingsModal(
     onOpenApiKey: () -> Unit,
 ) {
     Modal(inWindow = true) {
-        attr { absolutePositionAllZero(); allCenter(); backgroundColor(Color(0x66000000)); padding(20f) }
+        attr { absolutePositionAllZero(); allCenter(); backgroundColor(tokens.scrim); padding(20f) }
         View {
             attr {
                 width(pagerData.pageViewWidth - 40f)
@@ -3296,32 +3302,32 @@ private fun ViewContainer<*, *>.DshConnectionSettingsModal(
                 flexDirectionColumn()
                 padding(22f)
                 borderRadius(16f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(tokens.surface)
             }
             View {
                 attr { height(32f); flexDirectionRow(); alignItemsCenter() }
-                Text { attr { text("连接设置"); flex(1f); fontSize(20f); fontWeightBold(); color(Color(0xFF1F2933)) } }
-                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f) } }; DshHitButton { if (!busy()) onClose() } }
+                Text { attr { text("连接设置"); flex(1f); fontSize(20f); fontWeightBold(); color(tokens.primaryText) } }
+                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f); tintColor(tokens.icon) } }; DshHitButton { if (!busy()) onClose() } }
             }
-            Text { attr { text("选择 Agent 运行位置"); marginTop(16f); fontSize(13f); color(Color(0xFF68737D)) } }
+            Text { attr { text("选择 Agent 运行位置"); marginTop(16f); fontSize(13f); color(tokens.secondaryText) } }
             View {
-                attr { height(42f); marginTop(8f); flexDirectionRow(); borderRadius(8f); backgroundColor(Color(0xFFF1F3F5)); padding(4f) }
+                attr { height(42f); marginTop(8f); flexDirectionRow(); borderRadius(8f); backgroundColor(tokens.surfaceVariant); padding(4f) }
                 View {
-                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(Color(if (!sshMode()) 0xFFFFFFFF else 0x00FFFFFF)); borderRadius(6f) }
-                    Text { attr { text("扫码连接"); fontSize(13f); color(Color(if (!sshMode()) 0xFF4176E6 else 0xFF68737D)) } }
+                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(if (!sshMode()) tokens.surfaceElevated else Color.TRANSPARENT); borderRadius(6f) }
+                    Text { attr { text("扫码连接"); fontSize(13f); color(if (!sshMode()) tokens.primary else tokens.secondaryText) } }
                     event { click { onModeChange(false) } }
                 }
                 View {
-                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(Color(if (sshMode()) 0xFFFFFFFF else 0x00FFFFFF)); borderRadius(6f) }
-                    Text { attr { text("SSH 连接电脑"); fontSize(13f); color(Color(if (sshMode()) 0xFF4176E6 else 0xFF68737D)) } }
+                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(if (sshMode()) tokens.surfaceElevated else Color.TRANSPARENT); borderRadius(6f) }
+                    Text { attr { text("SSH 连接电脑"); fontSize(13f); color(if (sshMode()) tokens.primary else tokens.secondaryText) } }
                     event { click { onModeChange(true) } }
                 }
             }
             vif({ !sshMode() }) {
-                Text { attr { text("扫码模式连接电脑上的 DSH。返回连接页可重新扫码或更换电脑。"); marginTop(16f); fontSize(14f); lineHeight(21f); color(Color(0xFF68737D)) } }
+                Text { attr { text("扫码模式连接电脑上的 DSH。返回连接页可重新扫码或更换电脑。"); marginTop(16f); fontSize(14f); lineHeight(21f); color(tokens.secondaryText) } }
                 View {
                     attr { height(40f); marginTop(16f); flexDirectionRow(); justifyContentFlexEnd() }
-                    Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(Color(0xFF4176E6)); titleAttr { text("返回连接页"); fontSize(14f); color(Color.WHITE) } }; event { click { if (!busy()) onSave() } } }
+                    Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(tokens.primary); titleAttr { text("返回连接页"); fontSize(14f); color(tokens.onPrimary) } }; event { click { if (!busy()) onSave() } } }
                 }
             }
             velse {
@@ -3329,22 +3335,22 @@ private fun ViewContainer<*, *>.DshConnectionSettingsModal(
                 DshConnectionInput("SSH 用户名", user, "例如 alex", onUserChange)
                 View { attr { flexDirectionRow(); marginTop(12f) }; DshConnectionInput("SSH 端口", port, "22", onPortChange, 0.5f); DshConnectionInput("远程 DSH 端口", dshPort, "3080", onDshPortChange, 0.5f, 10f) }
                 View {
-                    attr { height(44f); marginTop(12f); flexDirectionRow(); alignItemsCenter(); paddingLeft(12f); paddingRight(10f); borderRadius(8f); backgroundColor(Color(0xFFF1F3F5)) }
-                    Text { attr { text(keyLabel()); flex(1f); fontSize(13f); color(Color(0xFF4F565C)) } }
-                    Text { attr { text(if (busy()) "导入中..." else "选择私钥"); fontSize(13f); color(Color(0xFF4176E6)) }; event { click { if (!busy()) onPickKey() } } }
+                    attr { height(44f); marginTop(12f); flexDirectionRow(); alignItemsCenter(); paddingLeft(12f); paddingRight(10f); borderRadius(8f); backgroundColor(tokens.surfaceVariant) }
+                    Text { attr { text(keyLabel()); flex(1f); fontSize(13f); color(tokens.secondaryText) } }
+                    Text { attr { text(if (busy()) "导入中..." else "选择私钥"); fontSize(13f); color(tokens.primary) }; event { click { if (!busy()) onPickKey() } } }
                 }
                 DshConnectionInput("私钥口令（如有）", keyPassphrase, "仅本次连接使用", onPassphraseChange, password = true)
                 vif({ error().startsWith("首次连接需要确认主机指纹：") }) {
                     View {
-                        attr { marginTop(10f); padding(10f); borderRadius(8f); backgroundColor(Color(0xFFFFF7E6)) }
-                        Text { attr { text("请确认这是你电脑的 SSH 主机指纹。确认后会保存，指纹变化时连接将被拒绝。"); fontSize(12f); lineHeight(18f); color(Color(0xFF7A5B16)) } }
-                        Text { attr { text("信任此指纹并连接"); marginTop(8f); fontSize(13f); color(Color(0xFF4176E6)) }; event { click { if (!busy()) onTrustFingerprint() } } }
+                        attr { marginTop(10f); padding(10f); borderRadius(8f); backgroundColor(tokens.warning.background) }
+                        Text { attr { text("请确认这是你电脑的 SSH 主机指纹。确认后会保存，指纹变化时连接将被拒绝。"); fontSize(12f); lineHeight(18f); color(tokens.warning.foreground) } }
+                        Text { attr { text("信任此指纹并连接"); marginTop(8f); fontSize(13f); color(tokens.primary) }; event { click { if (!busy()) onTrustFingerprint() } } }
                     }
                 }
                 vif({ error().isNotEmpty() && !error().startsWith("首次连接需要确认主机指纹：") }) {
-                    Text { attr { text(error()); marginTop(8f); fontSize(12f); lineHeight(18f); color(Color(0xFFBF3535)) } }
+                    Text { attr { text(error()); marginTop(8f); fontSize(12f); lineHeight(18f); color(tokens.error.foreground) } }
                 }
-                View { attr { marginTop(18f); height(40f); flexDirectionRow(); justifyContentFlexEnd() }; Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(Color(if (busy()) 0xFFB7C8FE else 0xFF4176E6)); titleAttr { text(if (busy()) "连接中..." else "保存并连接"); fontSize(14f); color(Color.WHITE) } }; event { click { if (!busy()) onSave() } } } }
+                View { attr { marginTop(18f); height(40f); flexDirectionRow(); justifyContentFlexEnd() }; Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(if (busy()) tokens.primaryDisabled else tokens.primary); titleAttr { text(if (busy()) "连接中..." else "保存并连接"); fontSize(14f); color(tokens.onPrimary) } }; event { click { if (!busy()) onSave() } } } }
             }
         }
     }
@@ -3361,12 +3367,12 @@ private fun ViewContainer<*, *>.DshConnectionInput(
 ) {
     View {
         attr { flex(flexValue); marginLeft(marginLeft); flexDirectionColumn() }
-        Text { attr { text(title); marginTop(10f); fontSize(12f); color(Color(0xFF68737D)) } }
+        Text { attr { text(title); marginTop(10f); fontSize(12f); color(tokens.secondaryText) } }
         View {
-            attr { height(40f); marginTop(5f); borderRadius(8f); border(Border(1f, BorderStyle.SOLID, Color(0xFFD9DEE3))); backgroundColor(Color(0xFFF9FAFB)); paddingLeft(10f); paddingRight(10f) }
+            attr { height(40f); marginTop(5f); borderRadius(8f); border(Border(1f, BorderStyle.SOLID, tokens.divider)); backgroundColor(tokens.surfaceVariant); paddingLeft(10f); paddingRight(10f) }
             Input {
                 ref { it.view?.setText(value()) }
-                attr { flex(1f); fontSize(14f); color(Color(0xFF222C35)); placeholder(hint); placeholderColor(Color(0xFF98A1A9)); returnKeyTypeDone(); if (password) keyboardTypePassword() }
+                attr { flex(1f); fontSize(14f); color(tokens.primaryText); placeholder(hint); placeholderColor(tokens.tertiaryText); returnKeyTypeDone(); if (password) keyboardTypePassword() }
                 event { textDidChange { onChange(it.text) } }
             }
         }
@@ -3388,7 +3394,7 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
             allCenter()
             paddingLeft(20f)
             paddingRight(20f)
-            backgroundColor(Color(0x66000000))
+            backgroundColor(tokens.scrim)
         }
         View {
             attr {
@@ -3397,7 +3403,7 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                 flexDirectionColumn()
                 padding(24f)
                 borderRadius(18f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(tokens.surface)
             }
             View {
                 attr {
@@ -3411,7 +3417,7 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                         flex(1f)
                         fontSize(20f)
                         fontWeightBold()
-                        color(Color(0xFF1F2933))
+                        color(tokens.primaryText)
                     }
                 }
                 View {
@@ -3423,6 +3429,7 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                         attr {
                             src(ImageUri.commonAssets("x.svg"))
                             size(20f, 20f)
+                            tintColor(tokens.icon)
                         }
                     }
                     DshHitButton { if (!busy()) onClose() }
@@ -3434,7 +3441,7 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                     marginTop(8f)
                     fontSize(14f)
                     lineHeight(21f)
-                    color(Color(0xFF6B7680))
+                    color(tokens.secondaryText)
                 }
             }
             Text {
@@ -3443,7 +3450,7 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                     marginTop(22f)
                     fontSize(13f)
                     fontWeightMedium()
-                    color(Color(0xFF343E47))
+                    color(tokens.primaryText)
                 }
             }
             View {
@@ -3451,10 +3458,8 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                     height(46f)
                     marginTop(8f)
                     borderRadius(8f)
-                    border(Border(1f, BorderStyle.SOLID, Color(
-                        if (error().isEmpty()) 0xFFD9DEE3 else 0xFFD44949,
-                    )))
-                    backgroundColor(Color(0xFFF9FAFB))
+                    border(Border(1f, BorderStyle.SOLID, if (error().isEmpty()) tokens.divider else tokens.error.foreground))
+                    backgroundColor(tokens.surfaceVariant)
                     paddingLeft(12f)
                     paddingRight(12f)
                 }
@@ -3463,9 +3468,9 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                     attr {
                         flex(1f)
                         fontSize(15f)
-                        color(Color(0xFF222C35))
+                        color(tokens.primaryText)
                         placeholder("输入 DeepSeek API Key")
-                        placeholderColor(Color(0xFF98A1A9))
+                        placeholderColor(tokens.tertiaryText)
                         keyboardTypePassword()
                         returnKeyTypeDone()
                         autofocus(true)
@@ -3484,7 +3489,7 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                         marginTop(8f)
                         fontSize(12f)
                         lineHeight(18f)
-                        color(Color(0xFFBF3535))
+                        color(tokens.error.foreground)
                     }
                 }
             }
@@ -3500,11 +3505,11 @@ private fun ViewContainer<*, *>.DshCredentialSetupModal(
                         width(132f)
                         height(40f)
                         borderRadius(8f)
-                        backgroundColor(Color(if (busy()) 0xFFB7C8FE else 0xFF4176E6))
+                        backgroundColor(if (busy()) tokens.primaryDisabled else tokens.primary)
                         titleAttr {
                             text(if (busy()) "保存中..." else "保存并继续")
                             fontSize(14f)
-                            color(Color.WHITE)
+                            color(tokens.onPrimary)
                         }
                     }
                     event { click { if (!busy()) onSave() } }
@@ -3522,6 +3527,7 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
     animated: () -> Boolean,
     onClose: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAppearance: () -> Unit,
     onNewSession: () -> Unit,
     onSelect: (String) -> Unit,
 ) {
@@ -3529,7 +3535,7 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
         attr {
             absolutePositionAllZero()
             flexDirectionRow()
-            backgroundColor(Color(0x00000000))
+            backgroundColor(Color.TRANSPARENT)
         }
         View {
             attr {
@@ -3540,7 +3546,7 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
                 paddingLeft(14f)
                 paddingRight(14f)
                 paddingBottom(18f)
-                backgroundColor(Color(0xFFF9FAFB))
+                backgroundColor(tokens.background)
                 transform(Translate(if (animated()) 0f else -1f, 0f))
                 animation(Animation.easeOut(0.24f), animated())
             }
@@ -3555,12 +3561,13 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
                         src(ImageUri.commonAssets("wordmark.svg"))
                         width(118f)
                         height(28f)
+                        tintColor(tokens.primaryText)
                     }
                 }
                 View { attr { flex(1f) } }
                 View {
                     attr { size(38f, 38f); allCenter() }
-                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(22f, 22f) } }
+                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(22f, 22f); tintColor(tokens.icon) } }
                     event { click { onClose() } }
                 }
             }
@@ -3573,16 +3580,16 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
                     paddingLeft(12f)
                     paddingRight(12f)
                     borderRadius(9f)
-                    backgroundColor(Color(0xFFF1F3F5))
+                    backgroundColor(tokens.surfaceVariant)
                 }
-                Image { attr { src(ImageUri.commonAssets("plus.svg")); size(20f, 20f) } }
+                Image { attr { src(ImageUri.commonAssets("plus.svg")); size(20f, 20f); tintColor(tokens.icon) } }
                 Text {
                     attr {
                         text("新会话")
                         marginLeft(10f)
                         fontSize(14f)
                         fontWeightMedium()
-                        color(Color(0xFF32373C))
+                        color(tokens.primaryText)
                     }
                 }
                 event { click { onNewSession() } }
@@ -3596,16 +3603,39 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
                     paddingLeft(12f)
                     paddingRight(12f)
                     borderRadius(9f)
-                    backgroundColor(Color(0x00000000))
+                    backgroundColor(Color.TRANSPARENT)
                 }
-                Image { attr { src(ImageUri.commonAssets("sliders.svg")); size(20f, 20f) } }
+                Image { attr { src(ImageUri.commonAssets("appearance.svg")); size(20f, 20f); tintColor(tokens.icon) } }
                 Text {
                     attr {
-                        text("设置")
+                        text("外观")
                         marginLeft(10f)
                         fontSize(14f)
                         fontWeightMedium()
-                        color(Color(0xFF555D64))
+                        color(tokens.secondaryText)
+                    }
+                }
+                event { click { onOpenAppearance() } }
+            }
+            View {
+                attr {
+                    height(42f)
+                    marginTop(8f)
+                    flexDirectionRow()
+                    alignItemsCenter()
+                    paddingLeft(12f)
+                    paddingRight(12f)
+                    borderRadius(9f)
+                    backgroundColor(Color.TRANSPARENT)
+                }
+                Image { attr { src(ImageUri.commonAssets("sliders.svg")); size(20f, 20f); tintColor(tokens.icon) } }
+                Text {
+                    attr {
+                        text("连接设置")
+                        marginLeft(10f)
+                        fontSize(14f)
+                        fontWeightMedium()
+                        color(tokens.secondaryText)
                     }
                 }
                 event { click { onOpenSettings() } }
@@ -3616,7 +3646,7 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
                     marginTop(20f)
                     marginBottom(8f)
                     fontSize(12f)
-                    color(Color(0xFF8B9298))
+                    color(tokens.captionText)
                 }
             }
             Scroller {
@@ -3646,7 +3676,7 @@ private fun ViewContainer<*, *>.DshSessionDrawer(
                                     lines(1)
                                     fontSize(12f)
                                     fontWeightMedium()
-                                    color(Color(0xFF7A838A))
+                                    color(tokens.secondaryText)
                                 }
                             }
                             group.sessions.forEach { session ->
@@ -3689,13 +3719,13 @@ private fun ViewContainer<*, *>.DshSessionDrawerRow(
             paddingLeft(12f)
             paddingRight(10f)
             borderRadius(9f)
-            backgroundColor(Color(if (active) 0xFFE3E6EA else 0x00FFFFFF))
+            backgroundColor(if (active) tokens.selectedSurface else Color.TRANSPARENT)
         }
         View {
             attr {
                 size(7f, 7f)
                 borderRadius(4f)
-                backgroundColor(Color(if (running) 0xFF4176E6 else 0xFFADB2B8))
+                backgroundColor(if (running) tokens.primary else tokens.tertiaryText)
             }
         }
         View {
@@ -3710,7 +3740,7 @@ private fun ViewContainer<*, *>.DshSessionDrawerRow(
                     text(title)
                     lines(1)
                     fontSize(14f)
-                    color(Color(0xFF2B3136))
+                    color(tokens.primaryText)
                 }
             }
             Text {
@@ -3719,7 +3749,7 @@ private fun ViewContainer<*, *>.DshSessionDrawerRow(
                     lines(1)
                     marginTop(2f)
                     fontSize(10f)
-                    color(Color(0xFF969DA3))
+                    color(tokens.tertiaryText)
                 }
             }
         }
@@ -3739,7 +3769,7 @@ private fun ViewContainer<*, *>.DshModelPicker(
             absolutePositionAllZero()
             flexDirectionColumn()
             justifyContentFlexEnd()
-            backgroundColor(Color(0x55000000))
+            backgroundColor(tokens.scrim)
         }
         View {
             attr { flex(1f) }
@@ -3751,7 +3781,7 @@ private fun ViewContainer<*, *>.DshModelPicker(
                 flexDirectionColumn()
                 padding(18f)
                 borderRadius(20f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(tokens.surface)
             }
             View {
                 attr { height(40f); flexDirectionRow(); alignItemsCenter() }
@@ -3760,13 +3790,13 @@ private fun ViewContainer<*, *>.DshModelPicker(
                         text("选择模型")
                         fontSize(18f)
                         fontWeightBold()
-                        color(Color(0xFF252B30))
+                        color(tokens.primaryText)
                     }
                 }
                 View { attr { flex(1f) } }
                 View {
                     attr { size(36f, 36f); allCenter() }
-                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(21f, 21f) } }
+                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(21f, 21f); tintColor(tokens.icon) } }
                     event { click { onClose() } }
                 }
             }
@@ -3777,7 +3807,7 @@ private fun ViewContainer<*, *>.DshModelPicker(
                         marginTop(6f)
                         marginBottom(6f)
                         fontSize(12f)
-                        color(Color(0xFFBF3535))
+                        color(tokens.error.foreground)
                     }
                 }
             }
@@ -3787,7 +3817,7 @@ private fun ViewContainer<*, *>.DshModelPicker(
                         text("正在加载模型...")
                         marginTop(24f)
                         fontSize(14f)
-                        color(Color(0xFF7D858C))
+                        color(tokens.secondaryText)
                     }
                 }
             }
@@ -3802,7 +3832,7 @@ private fun ViewContainer<*, *>.DshModelPicker(
                             alignItemsCenter()
                             padding(10f, 12f, 10f, 12f)
                             borderRadius(10f)
-                            backgroundColor(Color(if (option.selected) 0xFFF0F3FA else 0xFFF8F8F9))
+                            backgroundColor(if (option.selected) tokens.selectedSurface else tokens.surfaceVariant)
                         }
                         View {
                             attr { flex(1f); flexDirectionColumn() }
@@ -3811,7 +3841,7 @@ private fun ViewContainer<*, *>.DshModelPicker(
                                     text(option.name)
                                     fontSize(14f)
                                     fontWeightMedium()
-                                    color(Color(0xFF2C3237))
+                                    color(tokens.primaryText)
                                 }
                             }
                             Text {
@@ -3820,12 +3850,12 @@ private fun ViewContainer<*, *>.DshModelPicker(
                                     marginTop(3f)
                                     lines(1)
                                     fontSize(11f)
-                                    color(Color(0xFF8B939A))
+                                    color(tokens.tertiaryText)
                                 }
                             }
                         }
                         if (option.selected) {
-                            Text { attr { text("✓"); fontSize(17f); color(Color(0xFF4176E6)) } }
+                            Text { attr { text("✓"); fontSize(17f); color(tokens.primary) } }
                         }
                         event { click { if (!busy()) onSelect(option) } }
                     }
@@ -3846,8 +3876,8 @@ private fun ViewContainer<*, *>.DshTopBar(
             alignItemsCenter()
             paddingLeft(12f)
             paddingRight(14f)
-            backgroundColor(Color.WHITE)
-            borderBottom(Border(1f, BorderStyle.SOLID, Color(0xFFEBEEF2)))
+            backgroundColor(tokens.surface)
+            borderBottom(Border(1f, BorderStyle.SOLID, tokens.divider))
         }
         View {
             attr { size(38f, 38f); allCenter() }
@@ -3855,6 +3885,7 @@ private fun ViewContainer<*, *>.DshTopBar(
                 attr {
                     src(ImageUri.commonAssets("menu.svg"))
                     size(26f, 26f)
+                    tintColor(tokens.icon)
                 }
             }
         }
@@ -3865,7 +3896,7 @@ private fun ViewContainer<*, *>.DshTopBar(
                 flex(1f)
                 fontSize(17f)
                 fontWeightMedium()
-                color(Color(0xFF0F1115))
+                color(tokens.primaryText)
                 lines(1)
             }
         }
@@ -3877,7 +3908,7 @@ private fun ViewContainer<*, *>.DshTopBar(
                 paddingLeft(8f)
                 paddingRight(8f)
                 borderRadius(11f)
-                backgroundColor(Color(if (ready) 0xFFE8F7EE else 0xFFF3F5F7))
+                backgroundColor(if (ready) tokens.success.background else tokens.disabled.background)
                 justifyContentCenter()
                 alignItemsCenter()
             }
@@ -3887,7 +3918,7 @@ private fun ViewContainer<*, *>.DshTopBar(
                     text(if (ready) "已连接" else topBarConnectingText(connection()))
                     fontSize(11f)
                     lines(1)
-                    color(Color(if (ready) 0xFF1F8A4C else 0xFF6B7785))
+                    color(if (ready) tokens.success.foreground else tokens.disabled.foreground)
                 }
             }
         }
@@ -3909,14 +3940,14 @@ private fun ViewContainer<*, *>.DshSessionRail(
                 width(236f)
                 flexDirectionColumn()
             }
-            backgroundColor(Color(0xFFF7F7F8))
+            backgroundColor(tokens.surfaceVariant)
             padding(14f)
         }
         Text {
             attr {
                 text("会话")
                 fontSize(13f)
-                color(Color(0xFF6F7378))
+                color(tokens.secondaryText)
                 marginBottom(9f)
             }
         }
@@ -3952,10 +3983,10 @@ private fun ViewContainer<*, *>.DshSessionButton(
             width(if (active) 220f else 220f)
             marginBottom(4f)
             borderRadius(7f)
-            backgroundColor(Color(if (active) 0xFFE4EDFD else 0x00000000))
+            backgroundColor(if (active) tokens.selectedSurface else Color.TRANSPARENT)
             titleAttr {
                 text(session.title)
-                color(Color(if (active) 0xFF4176E6 else 0xFF3E4247))
+                color(if (active) tokens.primary else tokens.primaryText)
                 fontSize(13f)
             }
         }
@@ -3978,14 +4009,14 @@ private fun ViewContainer<*, *>.DshSessionDetailsPanel(
             height(pagerData.pageViewHeight)
             flexDirectionColumn()
             padding(16f)
-            backgroundColor(Color(0xFFF7F9FA))
-            border(Border(1f, BorderStyle.SOLID, Color(0xFFE5E8EB)))
+            backgroundColor(tokens.background)
+            border(Border(1f, BorderStyle.SOLID, tokens.divider))
         }
         Text {
             attr {
                 text("Session")
                 fontSize(12f)
-                color(Color(0xFF7A8790))
+                color(tokens.secondaryText)
             }
         }
         Text {
@@ -3994,7 +4025,7 @@ private fun ViewContainer<*, *>.DshSessionDetailsPanel(
                 marginTop(6f)
                 fontSize(17f)
                 fontWeightSemiBold()
-                color(Color(0xFF1F2933))
+                color(tokens.primaryText)
                 lines(2)
             }
         }
@@ -4002,7 +4033,7 @@ private fun ViewContainer<*, *>.DshSessionDetailsPanel(
             attr {
                 height(1f)
                 marginTop(14f)
-                backgroundColor(Color(0xFFE5E8EB))
+                backgroundColor(tokens.divider)
             }
         }
         DshDetailRow("状态", if (running()) "运行中" else "空闲")
@@ -4033,7 +4064,7 @@ private fun ViewContainer<*, *>.DshDetailRow(
             attr {
                 text(label)
                 fontSize(11f)
-                color(Color(0xFF8B9298))
+                color(tokens.tertiaryText)
             }
         }
         Text {
@@ -4041,7 +4072,7 @@ private fun ViewContainer<*, *>.DshDetailRow(
                 text(value)
                 marginTop(2f)
                 fontSize(13f)
-                color(Color(0xFF343E47))
+                color(tokens.primaryText)
                 lines(2)
             }
         }
@@ -4067,7 +4098,7 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
             allCenter()
             paddingLeft(20f)
             paddingRight(20f)
-            backgroundColor(Color(0x66000000))
+            backgroundColor(tokens.scrim)
         }
         View {
             attr {
@@ -4077,7 +4108,7 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                 flexDirectionColumn()
                 padding(18f)
                 borderRadius(16f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(tokens.surface)
             }
             View {
                 attr { height(36f); flexDirectionRow(); alignItemsCenter() }
@@ -4088,17 +4119,17 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                         lines(1)
                         fontSize(17f)
                         fontWeightBold()
-                        color(Color(0xFF1F2933))
+                        color(tokens.primaryText)
                     }
                 }
-                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f) } }; DshHitButton { onClose() } }
+                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f); tintColor(tokens.icon) } }; DshHitButton { onClose() } }
             }
             Scroller {
                 attr {
                     flex(1f)
                     marginTop(12f)
                     borderRadius(8f)
-                    backgroundColor(Color(0xFFF7F9FA))
+                    backgroundColor(tokens.surfaceVariant)
                 }
                 vfor({ entries() }) { entry ->
                     View {
@@ -4115,7 +4146,7 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                                 flex(1f)
                                 lines(1)
                                 fontSize(14f)
-                                color(Color(0xFF343E47))
+                                color(tokens.primaryText)
                             }
                         }
                         event { click { if (!busy()) onDirectorySelect(entry.path) } }
@@ -4123,7 +4154,7 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                 }
             }
             vif({ error().isNotEmpty() }) {
-                Text { attr { text(error()); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
+                Text { attr { text(error()); marginTop(8f); fontSize(12f); color(tokens.error.foreground) } }
             }
             Input {
                 attr {
@@ -4131,7 +4162,7 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                     marginTop(10f)
                     fontSize(14f)
                     placeholder("新目录名称")
-                    placeholderColor(Color(0xFF98A1A9))
+                    placeholderColor(tokens.tertiaryText)
                 }
                 event { textDidChange { onNewNameChange(it.text) } }
             }
@@ -4144,7 +4175,7 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                         height(38f)
                         textAlignCenter()
                         fontSize(13f)
-                        color(Color(0xFF7A838A))
+                        color(tokens.secondaryText)
                     }
                     event { click { if (!busy()) onCreateDirectory() } }
                 }
@@ -4156,7 +4187,7 @@ private fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                         marginLeft(8f)
                         textAlignCenter()
                         fontSize(13f)
-                        color(Color(0xFF4176E6))
+                        color(tokens.primary)
                     }
                     event { click { if (!busy()) onAdopt() } }
                 }
@@ -4185,7 +4216,7 @@ private fun ViewContainer<*, *>.DshTurnStatus(
                     text(dshTurnStatusLabel(reconnecting()))
                     fontSize(14f)
                     fontWeightBold()
-                    color(Color(if (shimmerOn()) TURN_STATUS_HIGHLIGHT else TURN_STATUS_BLUE))
+                    color(if (shimmerOn()) tokens.primaryPressed else tokens.primary)
                     animation(Animation.linear(1.8f), shimmerOn())
                 }
             }
@@ -4194,7 +4225,7 @@ private fun ViewContainer<*, *>.DshTurnStatus(
                     attr {
                         text(dshFormatTurnDuration(elapsedMs()))
                         fontSize(13f)
-                        color(Color(0xFF8A9399))
+                        color(tokens.tertiaryText)
                         marginLeft(8f)
                     }
                 }
@@ -4203,8 +4234,6 @@ private fun ViewContainer<*, *>.DshTurnStatus(
     }
 }
 
-private const val TURN_STATUS_BLUE = 0xFF4D6BFE
-private const val TURN_STATUS_HIGHLIGHT = 0xFFC5D4FF
 private const val TURN_STATUS_CLOCK_AFTER_MS = 15_000L
 
 private fun ViewContainer<*, *>.DshConversation(
@@ -4291,7 +4320,7 @@ private fun ViewContainer<*, *>.DshConversation(
             flex(1f)
             width(availableWidth)
             flexDirectionColumn()
-            backgroundColor(Color.WHITE)
+            backgroundColor(tokens.surface)
         }
         View {
             attr {
@@ -4308,7 +4337,7 @@ private fun ViewContainer<*, *>.DshConversation(
                 attr {
                 flex(1f)
                 width(availableWidth)
-                backgroundColor(Color.WHITE)
+                backgroundColor(tokens.surface)
             }
             vfor({ conversationIds() }) { sessionId ->
                 List {
@@ -4472,9 +4501,9 @@ private fun ViewContainer<*, *>.DshConversation(
                     width(availableWidth)
                     flexDirectionColumn()
                     padding(12f, 14f, 12f, 14f)
-                    backgroundColor(Color.WHITE)
+                    backgroundColor(tokens.surfaceElevated)
                     borderRadius(22f)
-                    border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E5EE)))
+                    border(Border(1f, BorderStyle.SOLID, tokens.divider))
                 }
                 vif({
                     isWebTimeline() && draft().startsWith("/") &&
@@ -4485,9 +4514,9 @@ private fun ViewContainer<*, *>.DshConversation(
                             maxHeight(132f)
                             marginBottom(6f)
                             flexDirectionColumn()
-                            backgroundColor(Color(0xFFF7F9FB))
+                            backgroundColor(tokens.surfaceVariant)
                             borderRadius(8f)
-                            border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E7ED)))
+                            border(Border(1f, BorderStyle.SOLID, tokens.divider))
                         }
                         vfor({ visibleSkillList(skills(), draft().removePrefix("/")) }) { skill ->
                             View {
@@ -4505,7 +4534,7 @@ private fun ViewContainer<*, *>.DshConversation(
                                         width(110f)
                                         fontSize(13f)
                                         fontWeightMedium()
-                                        color(Color(0xFF2F6F4F))
+                                        color(tokens.success.foreground)
                                     }
                                 }
                                 Text {
@@ -4514,7 +4543,7 @@ private fun ViewContainer<*, *>.DshConversation(
                                         flex(1f)
                                         lines(1)
                                         fontSize(11f)
-                                        color(Color(0xFF727D84))
+                                        color(tokens.secondaryText)
                                     }
                                 }
                             }
@@ -4525,11 +4554,11 @@ private fun ViewContainer<*, *>.DshConversation(
                 ref { inputRef(it) }
                 attr {
                     height(58f)
-                    backgroundColor(Color(0x00FFFFFF))
+                    backgroundColor(Color.TRANSPARENT)
                     fontSize(15f)
-                    color(Color(0xFF28323C))
+                    color(tokens.primaryText)
                     placeholder(if (voiceActive()) "正在聆听..." else "请输入您的问题...")
-                    placeholderColor(Color(0xFF91A0AA))
+                    placeholderColor(tokens.tertiaryText)
                     returnKeyTypeSend()
                     editable(!voiceActive())
                 }
@@ -4553,7 +4582,7 @@ private fun ViewContainer<*, *>.DshConversation(
                         flexDirectionColumn()
                         padding(8f)
                         borderRadius(10f)
-                        backgroundColor(Color(0xFFF5F6F7))
+                        backgroundColor(tokens.surfaceVariant)
                     }
                     View {
                         attr {
@@ -4562,9 +4591,9 @@ private fun ViewContainer<*, *>.DshConversation(
                             alignItemsCenter()
                             paddingLeft(8f)
                         }
-                        Text { attr { text("图片"); fontSize(14f); color(Color(0xFF3B4147)) } }
+                        Text { attr { text("图片"); fontSize(14f); color(tokens.primaryText) } }
                         View { attr { flex(1f) } }
-                        Text { attr { text("PNG / JPG / WebP / GIF"); fontSize(11f); color(Color(0xFF9098A0)) } }
+                        Text { attr { text("PNG / JPG / WebP / GIF"); fontSize(11f); color(tokens.tertiaryText) } }
                     }
                     View {
                         attr {
@@ -4573,9 +4602,9 @@ private fun ViewContainer<*, *>.DshConversation(
                             alignItemsCenter()
                             paddingLeft(8f)
                         }
-                        Text { attr { text("文件"); fontSize(14f); color(Color(0xFF3B4147)) } }
+                        Text { attr { text("文件"); fontSize(14f); color(tokens.primaryText) } }
                         View { attr { flex(1f) } }
-                        Text { attr { text("选择本地文件"); fontSize(11f); color(Color(0xFF9098A0)) } }
+                        Text { attr { text("选择本地文件"); fontSize(11f); color(tokens.tertiaryText) } }
                     }
                 }
             }
@@ -4595,7 +4624,7 @@ private fun ViewContainer<*, *>.DshConversation(
                         paddingLeft(12f)
                         paddingRight(9f)
                         borderRadius(20f)
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFCFD3D6)))
+                        border(Border(1f, BorderStyle.SOLID, tokens.dividerStrong))
                     }
                     Text {
                         attr {
@@ -4603,13 +4632,14 @@ private fun ViewContainer<*, *>.DshConversation(
                             flex(1f)
                             lines(1)
                             fontSize(14f)
-                            color(Color(0xFF31363B))
+                            color(tokens.primaryText)
                         }
                     }
                     Image {
                         attr {
                             src(ImageUri.commonAssets("chevron-down.svg"))
                             size(18f, 18f)
+                            tintColor(tokens.icon)
                         }
                     }
                     DshHitButton(onOpenModels)
@@ -4617,7 +4647,7 @@ private fun ViewContainer<*, *>.DshConversation(
                 View { attr { flex(1f) } }
                 View {
                     attr { size(40f, 40f); allCenter() }
-                    Image { attr { src(ImageUri.commonAssets("sliders.svg")); size(22f, 22f) } }
+                    Image { attr { src(ImageUri.commonAssets("sliders.svg")); size(22f, 22f); tintColor(tokens.icon) } }
                 }
                 View {
                     attr {
@@ -4625,19 +4655,20 @@ private fun ViewContainer<*, *>.DshConversation(
                         marginLeft(6f)
                         borderRadius(24f)
                         allCenter()
-                        backgroundColor(Color(
+                        backgroundColor(
                             when {
-                                stopButtonVisible() -> 0xFFE05252
-                                voiceActive() -> 0xFF679EFE
-                                else -> 0xFF4176E6
+                                stopButtonVisible() -> tokens.error.foreground
+                                voiceActive() -> tokens.primaryPressed
+                                else -> tokens.primary
                             },
-                        ))
+                        )
                     }
                     vif({ stopButtonVisible() }) {
                         Image {
                             attr {
                                 src(ImageUri.commonAssets("square.svg"))
                                 size(23f, 23f)
+                                tintColor(tokens.onPrimary)
                             }
                         }
                     }
@@ -4646,6 +4677,7 @@ private fun ViewContainer<*, *>.DshConversation(
                             attr {
                                 src(ImageUri.commonAssets(if (draft().isEmpty()) "mic.svg" else "send.svg"))
                                 size(23f, 23f)
+                                tintColor(tokens.onPrimary)
                             }
                         }
                     }
@@ -4737,8 +4769,8 @@ private fun ViewContainer<*, *>.DshMessageRow(
                 height(220f)
                 marginBottom(12f)
                 borderRadius(8f)
-                backgroundColor(Color(0xFFF6F8FA))
-                border(Border(1f, BorderStyle.SOLID, Color(0xFFE4E8EC)))
+                backgroundColor(tokens.surfaceVariant)
+                border(Border(1f, BorderStyle.SOLID, tokens.divider))
                 justifyContentCenter()
                 alignItemsCenter()
             }
@@ -4756,7 +4788,7 @@ private fun ViewContainer<*, *>.DshMessageRow(
                     attr {
                         text("图片加载中")
                         fontSize(12f)
-                        color(Color(0xFF7A838A))
+                        color(tokens.secondaryText)
                     }
                 }
             }
@@ -4884,7 +4916,7 @@ private fun ViewContainer<*, *>.DshMessageRow(
                     DshMessageRole.ASSISTANT -> "DeepSeek"
                 })
                 fontSize(11f)
-                color(Color(if (isError) 0xFFC23B3B else 0xFF84939D))
+                color(if (isError) tokens.error.foreground else tokens.tertiaryText)
                 marginBottom(5f)
             }
         }
@@ -4896,13 +4928,13 @@ private fun ViewContainer<*, *>.DshMessageRow(
                 maxWidth(620f)
                 padding(if (isUser) 10f else 0f, if (isUser) 14f else 0f, if (isUser) 10f else 0f, if (isUser) 14f else 0f)
                 borderRadius(if (isUser) 18f else 0f)
-                backgroundColor(Color(
+                backgroundColor(
                     when {
-                        isUser -> 0xFFEDF3FE
-                        isError -> 0xFFFFEEEE
-                        else -> 0x00FFFFFF
+                        isUser -> tokens.userBubble
+                        isError -> tokens.error.background
+                        else -> Color.TRANSPARENT
                     },
-                ))
+                )
             }
             if (isUser || isError) {
                 Text {
@@ -4910,7 +4942,7 @@ private fun ViewContainer<*, *>.DshMessageRow(
                         text(message.content)
                         lines(Int.MAX_VALUE)
                         fontSize(15f)
-                        color(Color(if (isUser) 0xFF34415B else 0xFFB53232))
+                        color(if (isUser) tokens.userBubbleText else tokens.error.foreground)
                     }
                 }
             } else {
@@ -4927,7 +4959,6 @@ private fun ViewContainer<*, *>.DshMessageRow(
                             liveContent = contentProvider
                             streamingProvider = pageStreaming
                             streaming = live
-                            darkMode = false
                         }
                     }
                     vif({ pageStreaming() && (contentProvider?.invoke() ?: message.content).isNotEmpty() }) {
@@ -4935,7 +4966,7 @@ private fun ViewContainer<*, *>.DshMessageRow(
                             attr {
                                 text(DshStreamingMarkdown.CURSOR)
                                 fontSize(14f)
-                                color(Color(0xFF4176E6))
+                                color(tokens.primary)
                                 marginTop(2f)
                             }
                         }
@@ -4950,7 +4981,7 @@ private fun ViewContainer<*, *>.DshHitButton(onClick: () -> Unit) {
     View {
         attr {
             absolutePositionAllZero()
-            backgroundColor(Color(0x00000000))
+            backgroundColor(Color.TRANSPARENT)
         }
         event { click { onClick() } }
     }

@@ -8,6 +8,9 @@ pluginManagement {
             url = uri("https://mirrors.tencent.com/nexus/repository/maven-tencent/")
         }
         maven {
+            url = uri("https://mirrors.tencent.com/nexus/repository/maven-public/")
+        }
+        maven {
             url = uri("https://hd-l.github.io/KuiklyUISqlite")
         }
     }
@@ -22,6 +25,9 @@ dependencyResolutionManagement {
             url = uri("https://mirrors.tencent.com/nexus/repository/maven-tencent/")
         }
         maven {
+            url = uri("https://mirrors.tencent.com/nexus/repository/maven-public/")
+        }
+        maven {
             url = uri("https://hd-l.github.io/KuiklyUISqlite")
         }
     }
@@ -32,6 +38,5 @@ rootProject.name = "DSH"
 val buildFileName = "build.ohos.gradle.kts"
 rootProject.buildFileName = buildFileName
 
-include(":androidApp")
 include(":shared")
 project(":shared").buildFileName = buildFileName

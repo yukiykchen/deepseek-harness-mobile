@@ -30,6 +30,8 @@
 		D5A1101829A2A174009349F1 /* DshQrScanViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101729A2A173009349F1 /* DshQrScanViewController.swift */; };
 		D5A1101A29A2A174009349F1 /* DshSshKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101929A2A173009349F1 /* DshSshKeyStore.swift */; };
 		D5A1101C29A2A174009349F1 /* DshNativeUi.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101B29A2A173009349F1 /* DshNativeUi.swift */; };
+		D5A1101E29A2A174009349F1 /* DshThemeChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101D29A2A173009349F1 /* DshThemeChrome.swift */; };
+		D5A1102029A2A174009349F1 /* DshThemeModule.m in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101F29A2A173009349F1 /* DshThemeModule.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -71,6 +73,9 @@
 		D5A1101729A2A173009349F1 /* DshQrScanViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DshQrScanViewController.swift; sourceTree = "<group>"; };
 		D5A1101929A2A173009349F1 /* DshSshKeyStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DshSshKeyStore.swift; sourceTree = "<group>"; };
 		D5A1101B29A2A173009349F1 /* DshNativeUi.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DshNativeUi.swift; sourceTree = "<group>"; };
+		D5A1101D29A2A173009349F1 /* DshThemeChrome.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DshThemeChrome.swift; sourceTree = "<group>"; };
+		D5A1101F29A2A173009349F1 /* DshThemeModule.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DshThemeModule.m; sourceTree = "<group>"; };
+		D5A1102129A2A173009349F1 /* DshThemeModule.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DshThemeModule.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -186,6 +191,8 @@
 				D5A1100129A2A173009349F1 /* DshRelayModule.h */,
 				D5A1100329A2A173009349F1 /* DshEngineModule.m */,
 				D5A1100429A2A173009349F1 /* DshEngineModule.h */,
+				D5A1101F29A2A173009349F1 /* DshThemeModule.m */,
+				D5A1102129A2A173009349F1 /* DshThemeModule.h */,
 			);
 			path = Modules;
 			sourceTree = "<group>";
@@ -200,6 +207,7 @@
 				D5A1101729A2A173009349F1 /* DshQrScanViewController.swift */,
 				D5A1101929A2A173009349F1 /* DshSshKeyStore.swift */,
 				D5A1101B29A2A173009349F1 /* DshNativeUi.swift */,
+				D5A1101D29A2A173009349F1 /* DshThemeChrome.swift */,
 				D5A1100629A2A173009349F1 /* DshSshTunnel.m */,
 				D5A1100829A2A173009349F1 /* DshSshTunnel.h */,
 			);
@@ -366,6 +374,8 @@
 				D5A1101829A2A174009349F1 /* DshQrScanViewController.swift in Sources */,
 				D5A1101A29A2A174009349F1 /* DshSshKeyStore.swift in Sources */,
 				D5A1101C29A2A174009349F1 /* DshNativeUi.swift in Sources */,
+				D5A1101E29A2A174009349F1 /* DshThemeChrome.swift in Sources */,
+				D5A1102029A2A174009349F1 /* DshThemeModule.m in Sources */,
 				FF6B714729A2A315009349F1 /* KuiklyRenderViewPage.swift in Sources */,
 				7555FF83242A565900829871 /* ContentView.swift in Sources */,
 				FF6B715029A2A6FF009349F1 /* KuiklyRenderComponentExpandHandler.m in Sources */,

@@ -76,6 +76,7 @@ kotlin {
             }
         }
         val androidMain by getting {
+            kotlin.srcDir("src/nonOhosMain/kotlin")
             dependencies {
                 api("com.tencent.kuikly-open:core-render-android:${Version.getKuiklyVersion()}")
                 implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
@@ -87,6 +88,7 @@ kotlin {
         val iosSimulatorArm64Main by getting
         val iosMain by creating {
             dependsOn(commonMain)
+            kotlin.srcDir("src/nonOhosMain/kotlin")
             dependencies {
                 implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
             }
@@ -103,7 +105,9 @@ kotlin {
             iosArm64Test.dependsOn(this)
             iosSimulatorArm64Test.dependsOn(this)
         }
-        val jsMain by getting
+        val jsMain by getting {
+            kotlin.srcDir("src/nonOhosMain/kotlin")
+        }
     }
 }
 
