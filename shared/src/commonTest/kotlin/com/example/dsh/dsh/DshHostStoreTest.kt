@@ -1113,6 +1113,25 @@ class DshHostStoreTest {
     }
 
     @Test
+    fun archivingCurrentSessionChoosesRecentVisibleThenBlankFallback() {
+        val sessions = listOf(
+            DshSession("current", "Current", "Host", ""),
+            DshSession("archived", "Archived", "Host", ""),
+            DshSession("recent", "Recent", "Host", ""),
+            DshSession("blank", "New", "Host", "", blank = true),
+        )
+
+        assertEquals(
+            "recent",
+            dshNextUnarchivedSession(sessions, setOf("current", "archived"), "current")?.id,
+        )
+        assertEquals(
+            "blank",
+            dshNextUnarchivedSession(sessions, setOf("current", "archived", "recent"), "current")?.id,
+        )
+    }
+
+    @Test
     fun sessionForkUsesCompletedTurnAnchorAndExportIsGet() {
         val anchor = 12
         val forkPayload = JSONObject().apply {

@@ -20,6 +20,7 @@ internal class DshRemoteRepository(
     onProjection: (String, String, String, Int) -> Unit = { _, _, _, _ -> },
     onSessionEvent: (String, DshRawSessionEvent) -> Unit = { _, _ -> },
     onRemoteEvent: (String) -> Unit = {},
+    onArchivedSessionsChanged: () -> Unit = {},
     onPendingInteraction: (String) -> Unit = {},
 ) : DshRepository {
     private val delegate = DshRemoteHostRepository(
@@ -34,6 +35,7 @@ internal class DshRemoteRepository(
         onProjection = onProjection,
         onSessionEvent = onSessionEvent,
         onRemoteEvent = onRemoteEvent,
+        onArchivedSessionsChanged = onArchivedSessionsChanged,
         onPendingInteraction = onPendingInteraction,
     )
     internal val store get() = delegate.store
@@ -103,6 +105,8 @@ internal class DshRemoteRepository(
     fun jobs(sessionId: String): List<DshJobItem> = delegate.jobs(sessionId)
 
     fun workspaceGroups(): List<DshWorkspaceGroup> = delegate.workspaceGroups()
+
+    fun archivedSessions(): List<DshSession> = delegate.archivedSessions()
 
     fun workspaceIdForSession(sessionId: String): String? = delegate.workspaceIdForSession(sessionId)
 

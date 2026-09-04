@@ -209,6 +209,12 @@ private fun sourceLabels(source: JSONObject, member: String, field: String): Str
     return labels.joinToString(", ")
 }
 
+private fun parseArchivedSessionIds(items: JSONArray): Set<String> = buildSet {
+    for (index in 0 until items.length()) {
+        items.optString(index)?.takeIf { it.isNotEmpty() }?.let(::add)
+    }
+}
+
 internal fun toolInputSummary(value: Any?): String = when (value) {
     null -> ""
     is String -> value
@@ -690,6 +696,7 @@ internal class DshRemoteHostRepository(
     onProjection: (String, String, String, Int) -> Unit = { _, _, _, _ -> },
     onSessionEvent: (String, DshRawSessionEvent) -> Unit = { _, _ -> },
     onRemoteEvent: (String) -> Unit = {},
+    onArchivedSessionsChanged: () -> Unit = {},
     onPendingInteraction: (String) -> Unit = {},
 ) : DshRepository {
     internal val store = DshHostStore()
@@ -699,6 +706,7 @@ internal class DshRemoteHostRepository(
     private val onProjectionHandler = onProjection
     private val onSessionEventHandler = onSessionEvent
     private val onRemoteEventHandler = onRemoteEvent
+    private val onArchivedSessionsChangedHandler = onArchivedSessionsChanged
     private val onPendingInteractionHandler = onPendingInteraction
     private val runtime = DshHostConnectionRuntime(
         network = network,
@@ -707,15 +715,7 @@ internal class DshRemoteHostRepository(
         pagerId = pagerId,
         onFrame = ::handleFrame,
         onState = onState,
-        onWorkspaceBaseline = { value ->
-            val archived = value.optJSONArray("archivedSessionIds")
-            val archivedIds = buildSet {
-                if (archived != null) for (index in 0 until archived.length()) {
-                    archived.optString(index)?.takeIf { it.isNotEmpty() }?.let(::add)
-                }
-            }
-            store.replaceWorkspaceBaseline(value.optJSONArray("items")?.toString() ?: "[]", archivedIds)
-        },
+        onWorkspaceBaseline = ::applyWorkspaceBaseline,
         onSessionBaseline = { value -> store.replaceSessions(parseSessions(value)) },
         onQueueSnapshot = onQueueSnapshot,
         onJobsSnapshot = onJobsSnapshot,
@@ -900,7 +900,7 @@ internal class DshRemoteHostRepository(
             }
             val sessions = parseSessions(value)
             store.replaceSessions(sessions)
-            onSuccess(sessions)
+            onSuccess(store.sessions.values.toList())
         }
     }
 
@@ -1155,6 +1155,9 @@ internal class DshRemoteHostRepository(
         )
     }
 
+    fun archivedSessions(): List<DshSession> =
+        store.archivedSessionIds.mapNotNull(store.sessions::get).filterNot { it.blank }
+
     fun workspaceIdForSession(sessionId: String): String? {
         val workspaces = runCatching { JSONArray(store.workspaceBaseline) }.getOrNull() ?: JSONArray()
         for (index in 0 until workspaces.length()) {
@@ -1170,7 +1173,11 @@ internal class DshRemoteHostRepository(
     }
 
     fun blankSessionInWorkspace(workspaceId: String?): DshSession? {
-        if (workspaceId == null) return store.sessions.values.firstOrNull { it.blank && it.cwd.isEmpty() }
+        if (workspaceId == null) {
+            return store.sessions.values.firstOrNull {
+                it.blank && it.cwd.isEmpty() && !store.archivedSessionIds.contains(it.id)
+            }
+        }
         val workspaces = runCatching { JSONArray(store.workspaceBaseline) }.getOrNull() ?: JSONArray()
         for (index in 0 until workspaces.length()) {
             val workspace = workspaces.optJSONObject(index) ?: continue
@@ -1179,7 +1186,7 @@ internal class DshRemoteHostRepository(
             for (sessionIndex in 0 until sessionIds.length()) {
                 val sessionId = sessionIds.optString(sessionIndex)
                 val session = store.sessions[sessionId] ?: continue
-                if (session.blank) return session
+                if (session.blank && !store.archivedSessionIds.contains(sessionId)) return session
             }
         }
         return null
@@ -1226,7 +1233,20 @@ internal class DshRemoteHostRepository(
         call(DshHostProtocol.SESSION_RENAME, JSONObject().apply {
             put("sessionId", sessionId)
             put("title", title)
-        }) { value, error -> callback(value, error) }
+        }) { value, error ->
+            if (error != null) {
+                callback(null, error)
+                return@call
+            }
+            val normalizedTitle = value?.optString("title").orEmpty()
+            val seq = value?.optInt("seq", -1) ?: -1
+            if (value == null || normalizedTitle.isEmpty() || seq < 0) {
+                callback(null, DshRpcError("bad-response", "session.rename 返回了非法标题结果"))
+                return@call
+            }
+            store.applyProjection(sessionId, "title", normalizedTitle, seq)
+            callback(value, null)
+        }
     }
 
     fun forkSession(
@@ -1245,7 +1265,20 @@ internal class DshRemoteHostRepository(
     ) {
         call(DshHostProtocol.WORKSPACE_ARCHIVE_SESSION, JSONObject().apply {
             put("sessionId", sessionId)
-        }) { value, error -> callback(value, error) }
+        }) { value, error ->
+            if (error != null) {
+                callback(null, error)
+                return@call
+            }
+            val archived = value?.optJSONArray("archivedSessionIds")
+            if (value == null || archived == null) {
+                callback(null, DshRpcError("bad-response", "workspace.archiveSession 返回了非法归档集合"))
+                return@call
+            }
+            val archivedIds = parseArchivedSessionIds(archived)
+            store.replaceWorkspaceBaseline(store.workspaceBaseline, archivedIds)
+            callback(value, null)
+        }
     }
 
     fun sessionExportUrl(sessionId: String, includeDescendants: Boolean = true): String {
@@ -1455,6 +1488,12 @@ internal class DshRemoteHostRepository(
     private fun call(method: String, payload: JSONObject, callback: (JSONObject?, DshRpcError?) -> Unit) =
         runtime.call(method, payload) { value, error, _ -> callback(value, error) }
 
+    private fun applyWorkspaceBaseline(value: JSONObject) {
+        val archived = value.optJSONArray("archivedSessionIds")
+        val archivedIds = archived?.let(::parseArchivedSessionIds).orEmpty()
+        store.replaceWorkspaceBaseline(value.optJSONArray("items")?.toString() ?: "[]", archivedIds)
+    }
+
     private fun handleFrame(frame: DshDownlinkFrame) {
         val envelope = runCatching { JSONObject(frame.raw) }.getOrNull()
         if (envelope == null) {
@@ -1649,6 +1688,12 @@ internal class DshRemoteHostRepository(
             "host/workspace-order-changed" -> {
                 val order = payload.optJSONArray("workspaceIds")?.toString() ?: return
                 store.reorderWorkspaces(order)
+            }
+            "host/archived-sessions-changed" -> {
+                val archived = payload.optJSONArray("archivedSessionIds") ?: return
+                val archivedIds = parseArchivedSessionIds(archived)
+                store.replaceWorkspaceBaseline(store.workspaceBaseline, archivedIds)
+                onArchivedSessionsChangedHandler()
             }
         }
     }
