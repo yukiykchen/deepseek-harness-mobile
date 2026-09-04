@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 部分国产 ROM（如小米 MIUI）的系统文件选择器要求调用方持有存储读取权限才会列出本地文件，
+         因此在 Android 12L 及以下声明并在导入 SSH 私钥前运行时申请；Android 13+ 由 SAF 覆盖，无需此权限。 -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
