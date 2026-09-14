@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Direct WebSocket transport for the Host's downlink-only event routes. */
+/** Bidirectional WebSocket transport for the Host's `/api/remote.mux` stream socket. */
 internal class KRDshWebSocketModule : KuiklyRenderBaseModule() {
     private val connections = ConcurrentHashMap<String, WebSocketConnection>()
 
@@ -34,12 +34,17 @@ internal class KRDshWebSocketModule : KuiklyRenderBaseModule() {
                 WebSocketConnection(
                     url = url,
                     token = value.optString("token"),
+                    cookie = value.optString("cookie"),
                     emit = { event -> activity?.runOnUiThread { callback.invoke(event) } },
                     onFinished = { connections.remove(connectionId) },
                 ).also {
                     connections[connectionId] = it
                     it.start()
                 }
+                null
+            }
+            "send" -> {
+                connections[value.optString("connectionId")]?.send(value.optString("data"))
                 null
             }
             "disconnect" -> {
@@ -53,6 +58,7 @@ internal class KRDshWebSocketModule : KuiklyRenderBaseModule() {
     private class WebSocketConnection(
         private val url: String,
         private val token: String,
+        private val cookie: String,
         private val emit: (Map<String, Any>) -> Unit,
         private val onFinished: () -> Unit,
     ) {
@@ -65,6 +71,7 @@ internal class KRDshWebSocketModule : KuiklyRenderBaseModule() {
                 .url(url)
                 .apply {
                     if (token.isNotEmpty()) header("Authorization", "Bearer $token")
+                    if (cookie.isNotEmpty()) header("Cookie", cookie)
                 }
                 .build()
             socket = WEB_SOCKET_CLIENT.newWebSocket(request, object : WebSocketListener() {
@@ -89,12 +96,22 @@ internal class KRDshWebSocketModule : KuiklyRenderBaseModule() {
                 override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
                     socket = null
                     if (!closed) {
-                        Log.e(TAG, "Host WebSocket failed url=$url http=${response?.code}", error)
-                        emit(mapOf("kind" to "ERROR", "message" to (error.message ?: "WebSocket connection failed")))
+                        val status = response?.code ?: 0
+                        Log.e(TAG, "Host WebSocket failed url=$url http=$status", error)
+                        emit(mapOf(
+                            "kind" to "ERROR",
+                            "message" to (error.message ?: "WebSocket connection failed"),
+                            "httpStatus" to status,
+                        ))
                     }
                     finish()
                 }
             })
+        }
+
+        fun send(text: String) {
+            if (closed || text.isEmpty()) return
+            socket?.send(text)
         }
 
         fun close() {

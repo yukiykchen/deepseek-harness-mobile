@@ -26,12 +26,22 @@ private class DshSqliteStore(path: String, legacyProfile: DshLegacyRemoteProfile
         listOf("deepseek_api_key", apiKey),
     )
 
+    override fun loadSetting(key: String): String = queryOne("SELECT value FROM dsh_settings WHERE key = ?", listOf(key)) {
+        it.getColumnString(0)
+    }.orEmpty()
+
+    override fun saveSetting(key: String, value: String) = execute(
+        "INSERT OR REPLACE INTO dsh_settings (key, value) VALUES (?, ?)",
+        listOf(key, value),
+    )
+
     override fun loadLastConnectionMode(): DshConnectionMode = queryOne(
         "SELECT value FROM dsh_settings WHERE key = ?", listOf("last_connection_mode"),
     ) { it.getColumnString(0) }.orEmpty().let {
         when (it) {
             "relay" -> DshConnectionMode.RELAY
             "ssh", "remote" -> DshConnectionMode.SSH
+            "direct" -> DshConnectionMode.DIRECT
             else -> DshConnectionMode.RELAY
         }
     }
@@ -44,23 +54,24 @@ private class DshSqliteStore(path: String, legacyProfile: DshLegacyRemoteProfile
                 DshConnectionMode.RELAY -> "relay"
                 DshConnectionMode.SSH -> "ssh"
                 DshConnectionMode.LOCAL -> "local"
+                DshConnectionMode.DIRECT -> "direct"
             },
         ),
     )
 
     override fun loadRemoteProfile(): DshRemoteProfile? = queryOne(
-        "SELECT profile_id, host, ssh_port, username, remote_dsh_port, key_id, host_fingerprint " +
+        "SELECT profile_id, host, ssh_port, username, remote_dsh_port, key_id, host_fingerprint, auth_token " +
             "FROM dsh_connection_profiles WHERE profile_id = ?",
         listOf(DshSessionScope.DEFAULT_REMOTE_PROFILE_ID),
     ) { s ->
-        DshRemoteProfile(s.getColumnString(0), s.getColumnString(1), s.getColumnLong(2).toInt(), s.getColumnString(3), s.getColumnLong(4).toInt(), s.getColumnString(5), s.getColumnString(6))
+        DshRemoteProfile(s.getColumnString(0), s.getColumnString(1), s.getColumnLong(2).toInt(), s.getColumnString(3), s.getColumnLong(4).toInt(), s.getColumnString(5), s.getColumnString(6), s.getColumnString(7))
     }
 
     override fun saveRemoteProfile(profile: DshRemoteProfile) = execute(
         "INSERT OR REPLACE INTO dsh_connection_profiles " +
-            "(profile_id, mode, protocol, host, ssh_port, username, remote_dsh_port, key_id, host_fingerprint, updated_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        listOf(profile.profileId, "SSH", "SSH_TUNNEL", profile.host, profile.sshPort.toString(), profile.username, profile.remoteDshPort.toString(), profile.keyId, profile.hostFingerprint, nowMs().toString()),
+            "(profile_id, mode, protocol, host, ssh_port, username, remote_dsh_port, key_id, host_fingerprint, auth_token, updated_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        listOf(profile.profileId, "SSH", "SSH_TUNNEL", profile.host, profile.sshPort.toString(), profile.username, profile.remoteDshPort.toString(), profile.keyId, profile.hostFingerprint, profile.authToken, nowMs().toString()),
     )
 
     override fun loadRelayProfile(): DshRelayProfile? = queryOne(
@@ -150,7 +161,7 @@ private class DshSqliteStore(path: String, legacyProfile: DshLegacyRemoteProfile
 }
 
 private class DshSchema(private val legacyProfile: DshLegacyRemoteProfile?) : SqlSchema {
-    override val version: Int = 5
+    override val version: Int = 6
 
     override fun create(driver: SqlDriver) {
         driver.execute("CREATE TABLE IF NOT EXISTS dsh_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -171,6 +182,11 @@ private class DshSchema(private val legacyProfile: DshLegacyRemoteProfile?) : Sq
             writeLegacyProfile(driver)
         }
         if (oldVersion < 5) migrateToV5(driver)
+        if (oldVersion < 6) migrateToV6(driver)
+    }
+
+    private fun migrateToV6(driver: SqlDriver) {
+        driver.execute("ALTER TABLE dsh_connection_profiles ADD COLUMN auth_token TEXT NOT NULL DEFAULT ''")
     }
 
     private fun migrateToV5(driver: SqlDriver) {
@@ -213,7 +229,7 @@ private class DshSchema(private val legacyProfile: DshLegacyRemoteProfile?) : Sq
     }
 
     private fun createProfileTable(driver: SqlDriver) {
-        driver.execute("CREATE TABLE IF NOT EXISTS dsh_connection_profiles (profile_id TEXT PRIMARY KEY, mode TEXT NOT NULL, protocol TEXT NOT NULL, host TEXT NOT NULL, ssh_port INTEGER NOT NULL, username TEXT NOT NULL, remote_dsh_port INTEGER NOT NULL, key_id TEXT NOT NULL, host_fingerprint TEXT NOT NULL, updated_at INTEGER NOT NULL)")
+        driver.execute("CREATE TABLE IF NOT EXISTS dsh_connection_profiles (profile_id TEXT PRIMARY KEY, mode TEXT NOT NULL, protocol TEXT NOT NULL, host TEXT NOT NULL, ssh_port INTEGER NOT NULL, username TEXT NOT NULL, remote_dsh_port INTEGER NOT NULL, key_id TEXT NOT NULL, host_fingerprint TEXT NOT NULL, updated_at INTEGER NOT NULL, auth_token TEXT NOT NULL DEFAULT '')")
     }
 
     private fun createRelayTable(driver: SqlDriver) {

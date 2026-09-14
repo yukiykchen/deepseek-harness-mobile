@@ -4,6 +4,26 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 
+/**
+ * Accept either the bare launch token or the full URL `dsh web` prints
+ * (`http://127.0.0.1:3080/?token=abc`), returning the token only.
+ */
+internal fun dshExtractLaunchToken(raw: String): String {
+    val value = raw.trim()
+    if (value.isEmpty()) return ""
+    val marker = "token="
+    val at = value.indexOf(marker)
+    if (at < 0) return value.trimEnd('/', '&', '#')
+    return value.substring(at + marker.length).takeWhile { it != '&' && it != '#' && !it.isWhitespace() }
+}
+
+/** Stable per-Host cache scope for direct connections: `host_port` with URL punctuation collapsed. */
+internal fun dshDirectProfileId(baseUrl: String): String {
+    val stripped = baseUrl.trim().removePrefix("https://").removePrefix("http://").trimEnd('/')
+    val id = stripped.map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+    return id.ifEmpty { "default" }
+}
+
 internal fun visibleSkillList(source: ObservableList<DshSkill>, query: String): ObservableList<DshSkill> {
     val next = source.toList().filter { it.name.startsWith(query) }
     skillFilterCache.diffUpdate(next) { old, new -> old.name == new.name }

@@ -1,0 +1,4 @@
+node_modules/
+# The repository root ignores *.js for Kuikly build output; this tool is plain Node source.
+!*.js
+!**/*.js

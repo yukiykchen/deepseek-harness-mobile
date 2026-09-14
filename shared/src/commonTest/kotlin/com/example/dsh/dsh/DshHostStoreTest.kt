@@ -139,45 +139,6 @@ class DshHostStoreTest {
     }
 
     @Test
-    fun pendingInteractionRpcIdPrefersEnvelopeThenPayload() {
-        val envelope = JSONObject().apply {
-            put("rpcId", "env-1")
-            put("payload", JSONObject().apply { put("rpcId", "inner-1") })
-        }
-        val payload = envelope.optJSONObject("payload") ?: error("payload")
-        assertEquals("env-1", pendingInteractionRpcId(envelope, payload))
-
-        val payloadOnly = JSONObject().apply { put("rpcId", "pay-1") }
-        assertEquals("pay-1", pendingInteractionRpcId(JSONObject(), payloadOnly))
-        assertEquals("", pendingInteractionRpcId(JSONObject(), JSONObject()))
-    }
-
-    @Test
-    fun parseRespondReceiptReadsTopLevelAndNestedAccepted() {
-        val top = JSONObject().apply {
-            put("accepted", true)
-        }
-        assertEquals(true to "", parseRespondReceipt(top))
-
-        val nested = JSONObject().apply {
-            put("type", "server-response")
-            put("result", JSONObject().apply {
-                put("ok", true)
-                put("value", JSONObject().apply {
-                    put("accepted", true)
-                })
-            })
-        }
-        assertEquals(true to "", parseRespondReceipt(nested))
-
-        val rejected = JSONObject().apply {
-            put("accepted", false)
-            put("reason", "not-pending")
-        }
-        assertEquals(false to "not-pending", parseRespondReceipt(rejected))
-    }
-
-    @Test
     fun questionAnswerUsesHostBatchWireShape() {
         val question = DshPendingQuestion(
             rpcId = "rpc-q",

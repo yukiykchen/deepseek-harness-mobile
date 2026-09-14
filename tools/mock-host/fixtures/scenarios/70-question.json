@@ -1,0 +1,36 @@
+{
+  "id": "question",
+  "match": ["ask", "question", "choose", "提问"],
+  "description": "Two user questions (single- and multi-select) delivered through the $events waterfall.",
+  "steps": [
+    { "kind": "text", "text": "Before I continue I need two decisions from you.", "chunk": 12, "delayMs": 25 },
+    {
+      "kind": "question",
+      "questions": [
+        {
+          "id": "theme",
+          "header": "Appearance",
+          "question": "Which theme should the app default to?",
+          "detail": "Follow-system reads the OS setting at launch and on change.",
+          "options": [
+            { "label": "Light", "description": "Always light" },
+            { "label": "Dark", "description": "Always dark" },
+            { "label": "Follow system", "description": "Match the OS" }
+          ],
+          "multiSelect": false
+        },
+        {
+          "id": "exports",
+          "header": "Export",
+          "question": "Which export formats do you want?",
+          "options": [
+            { "label": "Markdown" },
+            { "label": "HTML" },
+            { "label": "PDF" }
+          ],
+          "multiSelect": true
+        }
+      ]
+    }
+  ]
+}

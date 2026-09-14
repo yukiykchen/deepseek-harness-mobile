@@ -2,6 +2,7 @@ package com.example.dsh
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
 import android.view.View
@@ -22,6 +23,7 @@ import com.example.dsh.adapter.KRThreadAdapter
 import com.example.dsh.adapter.KRUncaughtExceptionHandlerAdapter
 import com.example.dsh.module.KRBridgeModule
 import com.example.dsh.module.KRDshEngineModule
+import com.example.dsh.module.KRDshMediaModule
 import com.example.dsh.module.KRDshRelayModule
 import com.example.dsh.module.KRDshWebSocketModule
 import com.example.dsh.module.KRShareModule
@@ -74,11 +76,13 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
         super.onActivityResult(requestCode, resultCode, data)
         KRBridgeModule.dispatchActivityResult(requestCode, resultCode, data)
         KRDshRelayModule.dispatchActivityResult(requestCode, resultCode, data)
+        KRDshMediaModule.dispatchActivityResult(requestCode, resultCode, data)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         KRBridgeModule.dispatchRequestPermissionsResult(requestCode, permissions, grantResults)
+        KRDshMediaModule.dispatchRequestPermissionsResult(requestCode, grantResults)
     }
 
     override fun onResume() {
@@ -104,6 +108,9 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
             moduleExport(KRDshWebSocketModule.MODULE_NAME) {
                 KRDshWebSocketModule()
             }
+            moduleExport(KRDshMediaModule.MODULE_NAME) {
+                KRDshMediaModule()
+            }
         }
     }
 
@@ -118,10 +125,47 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
         val param = argsToMap()
         param["appId"] = 1
         param["embeddedEngine"] = false
+        param[KEY_IS_NIGHT_MODE] = isSystemNightMode()
+        param[KEY_UTC_OFFSET_MINUTES] = utcOffsetMinutes()
         param["databaseDir"] = java.io.File(KRApplication.application.filesDir.parentFile, "databases").apply {
             if (!exists()) mkdirs()
         }.absolutePath
         return param
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        kuiklyRenderViewDelegator.sendEvent(
+            PAGER_EVENT_THEME_DID_CHANGED,
+            mapOf(KEY_IS_NIGHT_MODE to isSystemNightMode()),
+        )
+    }
+
+    private fun isSystemNightMode(): Boolean =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    /**
+     * Called from the shared layer whenever the resolved app palette flips. The app theme
+     * can differ from the system one, so the night resource qualifier is not enough here.
+     */
+    fun applyThemeChrome(dark: Boolean) {
+        window?.decorView?.let { decor ->
+            decor.systemUiVisibility = if (dark) {
+                decor.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+            } else {
+                decor.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            }
+        }
+        findViewById<View>(R.id.hr_root)?.setBackgroundColor(
+            getColor(if (dark) R.color.app_background_dark else R.color.app_background_light),
+        )
+    }
+
+    /** Minutes east of UTC, for the solar theme. Kuikly only exposes epoch milliseconds. */
+    private fun utcOffsetMinutes(): Int {
+        val zone = java.util.TimeZone.getDefault()
+        return zone.getOffset(System.currentTimeMillis()) / 60_000
     }
 
     private fun argsToMap(): MutableMap<String, Any> {
@@ -145,6 +189,9 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
 
         private const val KEY_PAGE_NAME = "pageName"
         private const val KEY_PAGE_DATA = "pageData"
+        private const val KEY_IS_NIGHT_MODE = "isNightMode"
+        private const val KEY_UTC_OFFSET_MINUTES = "utcOffsetMinutes"
+        private const val PAGER_EVENT_THEME_DID_CHANGED = "themeDidChanged"
 
         init {
             initKuiklyAdapter()

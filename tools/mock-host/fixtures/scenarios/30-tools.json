@@ -1,0 +1,49 @@
+{
+  "id": "tools",
+  "match": ["tool", "bash", "read", "edit", "工具"],
+  "description": "Interleaved text and tool cards: bash (terminal), read, edit with a diff meta payload, and a failing grep.",
+  "steps": [
+    { "kind": "text", "text": "Let me inspect the project first.", "chunk": 12, "delayMs": 25 },
+    {
+      "kind": "tool",
+      "name": "bash",
+      "arguments": { "command": "ls -la src", "description": "List the source directory" },
+      "result": "total 24\ndrwxr-xr-x  6 dev  staff  192 Sep 12 00:00 .\n-rw-r--r--  1 dev  staff  812 Sep 12 00:00 main.kt\n-rw-r--r--  1 dev  staff  420 Sep 12 00:00 util.kt",
+      "delayMs": 600
+    },
+    {
+      "kind": "tool",
+      "name": "read",
+      "arguments": { "path": "src/util.kt" },
+      "result": "1\tfun clamp(value: Int, min: Int, max: Int): Int {\n2\t    return if (value < min) min else if (value > max) max else value\n3\t}",
+      "delayMs": 400
+    },
+    { "kind": "text", "text": "`clamp` can be simplified with `coerceIn`. Applying the edit now.", "chunk": 12, "delayMs": 25 },
+    {
+      "kind": "tool",
+      "name": "edit",
+      "arguments": { "path": "src/util.kt", "old_string": "return if (value < min) min else if (value > max) max else value", "new_string": "return value.coerceIn(min, max)" },
+      "result": "Edited src/util.kt",
+      "meta": {
+        "diffs": [
+          {
+            "path": "src/util.kt",
+            "oldText": "fun clamp(value: Int, min: Int, max: Int): Int {\n    return if (value < min) min else if (value > max) max else value\n}",
+            "newText": "fun clamp(value: Int, min: Int, max: Int): Int {\n    return value.coerceIn(min, max)\n}"
+          }
+        ]
+      },
+      "delayMs": 500
+    },
+    {
+      "kind": "tool",
+      "name": "grep",
+      "arguments": { "pattern": "TODO", "path": "src" },
+      "result": "grep: src/missing: No such file or directory",
+      "isError": true,
+      "errorCode": "TOOL_FAILED",
+      "delayMs": 400
+    },
+    { "kind": "text", "text": "The edit is in place. The grep for `TODO` failed because `src/missing` does not exist, which is fine here.\n\n```diff\n- return if (value < min) min else if (value > max) max else value\n+ return value.coerceIn(min, max)\n```", "chunk": 14, "delayMs": 25 }
+  ]
+}

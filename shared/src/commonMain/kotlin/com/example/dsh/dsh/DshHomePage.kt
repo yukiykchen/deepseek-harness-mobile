@@ -4,6 +4,7 @@ import com.example.dsh.base.BasePager
 import com.example.dsh.base.bridgeModule
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.*
+import com.tencent.kuikly.core.datetime.DateTime
 import com.tencent.kuikly.core.directives.scrollToPosition
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.log.KLog
@@ -24,6 +25,7 @@ import com.tencent.kuikly.core.views.KeyboardParams
 import com.tencent.kuikly.core.views.ListContentView
 import com.tencent.kuikly.core.views.ListView
 import com.tencent.kuikly.core.views.ScrollParams
+import com.tencent.kuikly.core.views.SelectionType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,7 +55,9 @@ internal class DshHomePage : BasePager() {
     private val sshMode: Boolean
         get() = connectionMode == DshConnectionMode.SSH
     private val isRemoteHost: Boolean
-        get() = connectionMode == DshConnectionMode.RELAY || connectionMode == DshConnectionMode.SSH
+        get() = connectionMode != DshConnectionMode.LOCAL
+    private var directBaseUrl = ""
+    private var directAuthToken = ""
     private var remoteProfileId by observable(DshSessionScope.DEFAULT_REMOTE_PROFILE_ID)
     private var sshHost by observable("")
     private var sshUser by observable("")
@@ -63,6 +67,9 @@ internal class DshHomePage : BasePager() {
     private var sshFingerprint by observable("")
     private var sshKeyLabel by observable("未导入私钥")
     private var sshKeyPassphrase by observable("")
+    /** Launch token printed by `dsh web`; SSH has no plugin to discover it. */
+    private var sshAuthToken by observable("")
+    private var authenticator: DshStoredHostAuthenticator? = null
     private var sshSettingsVisible by observable(false)
     private var sshSettingsBusy by observable(false)
     private var sshSettingsError by observable("")
@@ -84,11 +91,22 @@ internal class DshHomePage : BasePager() {
     private var keyboardHeight by observable(0f)
     private var keyboardAnimation by observable(Animation.easeInOut(ANIMATION_DURATION_S))
     private var connectionLabel by observable("本地内核启动中")
+    private var hostRuntimePhase = DshHostRuntimePhase.DISCONNECTED
     private var apiKeyDraft by observable("")
     private var credentialSetupVisible by observable(false)
     private var credentialSetupBusy by observable(false)
     private var credentialSetupError by observable("")
     private var credentialSetupTitle by observable("添加一个 API Key 开始使用")
+    private var appearanceVisible by observable(false)
+    private var actionSheetMessageId by observable("")
+    private var actionSheetCodeBlockCount by observable(0)
+    private var actionSheetCodeBlocks = emptyList<DshCodeBlock>()
+    private var actionSheetFormulaCount by observable(0)
+    private var actionSheetFormulas = emptyList<String>()
+    private var actionSheetPoint = 0f to 0f
+    private var selectionMessageId by observable("")
+    private var batchSelectionActive by observable(false)
+    private var batchSelectedIds by observable(emptySet<String>())
     private var sessionDrawerVisible by observable(false)
     private var sessionDrawerAnimated by observable(false)
     private var sessionDrawerMaskAnimated by observable(false)
@@ -128,6 +146,8 @@ internal class DshHomePage : BasePager() {
     private var streamingReasoningContent = ""
     private val pendingAssistantDelta = StringBuilder()
     private var assistantFlushScheduled = false
+    /** Set once this turn projected a committed `assistant/message` into its own rows. */
+    private var assistantBlocksProjected = false
     private var scrollSettleGeneration = 0
     private var followListTail = true
     private var perfTraceSequence = 0
@@ -140,6 +160,16 @@ internal class DshHomePage : BasePager() {
     private var attachmentRevision by observable(0)
     private val cachedAttachmentDataUrls = mutableMapOf<String, String>()
     private val pendingAttachmentReads = mutableSetOf<String>()
+    private val stagedAttachments by observableList<DshStagedAttachment>()
+    private var attachmentNotice by observable("")
+    private var attachmentPickBusy = false
+    private var attachmentViewerRef by observable<DshImageAttachmentRef?>(null)
+    private var stagedAttachmentSequence = 0
+    /** Prompt text of the turn whose images failed, so "retry" can resend it. */
+    private var failedAttachmentPrompt = ""
+    /** Guards the first `session/create` so a fast send cannot start a second one. */
+    private var sessionCreateInFlight = false
+    private var pendingSendAfterCreate = false
     private var queueDockExpanded by observable(false)
     private val queueItems by observableList<DshQueueItem>()
     private var queueActionBusy by observable(false)
@@ -148,6 +178,49 @@ internal class DshHomePage : BasePager() {
     private var jobsNow by observable(0L)
     private var jobsClockScheduled by observable(false)
     private val workspaceGroups by observableList<DshWorkspaceGroup>()
+    private var sessionMenuId by observable("")
+    private var renameSessionId by observable("")
+    private var renameDraft by observable("")
+    private var renameError by observable("")
+    private var renameBusy by observable(false)
+    private var renameInputView: InputView? = null
+    private var archiveSessionId by observable("")
+    private var archiveError by observable("")
+    private var archiveBusy by observable(false)
+    private var archiveListVisible by observable(false)
+    private val archivedSessions by observableList<DshSession>()
+    private var pluginsVisible by observable(false)
+    private var pluginsLoading by observable(false)
+    private var pluginsError by observable("")
+    private var pluginQuery = ""
+    private var pluginStatusFilter by observable<DshPluginStatus?>(null)
+    private var pluginExpandedId by observable("")
+    private var pluginControllableIds by observable(emptySet<String>())
+    private var pluginControlBusyId by observable("")
+    private var pluginConfirmEntryId by observable("")
+    private var pluginConfirmAction = ""
+    private var pluginConfirmMessage by observable("")
+    private var pluginTotal by observable(0)
+    private var pluginFailedCount by observable(0)
+    /** Last snapshot the Host answered; the filtered view is derived from it. */
+    private var pluginEntries = emptyList<DshPluginEntry>()
+    private var pluginPresetsByModule = emptyMap<String, List<String>>()
+    private val pluginRows by observableList<DshPluginEntry>()
+    private val pluginStatusChips by observableList<DshPluginStatusChip>()
+    private val pluginBrokenPresets by observableList<String>()
+    private var logsVisible by observable(false)
+    private var logQuery = ""
+    private var logMinLevel by observable(DshLogLevel.DEBUG)
+    private var logEventType by observable("")
+    private var logSessionScoped by observable(false)
+    private var logWindowMs by observable(0L)
+    /** Snapshot clock: rows show their age against the moment the list was taken. */
+    private var logNow by observable(0L)
+    private var logTotal by observable(0)
+    private var logMatched by observable(0)
+    private var logDetail by observable<DshLogRecord?>(null)
+    private val logRecords by observableList<DshLogRecord>()
+    private val logTypeChips by observableList<DshLogTypeChip>()
     private val skills by observableList<DshSkill>()
     private var goalSnapshot by observable<DshGoalSnapshot?>(null)
     private var goalActionBusy by observable(false)
@@ -193,9 +266,14 @@ internal class DshHomePage : BasePager() {
         connectionMode = when (pageData.params.optString("connectionMode")) {
             "relay" -> DshConnectionMode.RELAY
             "ssh", "remote" -> DshConnectionMode.SSH
+            "direct" -> DshConnectionMode.DIRECT
             else -> DshConnectionMode.RELAY
         }
         remoteProfileId = pageData.params.optString("profileId").ifEmpty { DshSessionScope.DEFAULT_REMOTE_PROFILE_ID }
+        directBaseUrl = pageData.params.optString("baseUrl").ifEmpty {
+            runCatching { localStore?.loadSetting(DIRECT_BASE_URL_KEY) }.getOrNull().orEmpty()
+        }
+        directAuthToken = runCatching { localStore?.loadSetting(DIRECT_AUTH_TOKEN_KEY) }.getOrNull().orEmpty()
         loadSshConfig()
         restoreCachedSessions()
         if (sessions.isEmpty()) {
@@ -206,7 +284,6 @@ internal class DshHomePage : BasePager() {
         ensureConversationPanel(activeSessionId)
         preloadAllSessionMessages()
         perfLog("startup.preloadAllSessionMessages.scheduled", startedAt)
-        loadApiKeyAsync()
         setTimeout(pagerId, SESSION_CACHE_WARM_START_DELAY_MS) {
             warmRecentSessionCache(scrollToEndAfterLoad = false)
         }
@@ -229,7 +306,7 @@ internal class DshHomePage : BasePager() {
                 attr {
                     flex(1f)
                     flexDirectionColumn()
-                    backgroundColor(Color(BG))
+                    backgroundColor(theme.background)
                     paddingTop(pagerData.statusBarHeight)
                 }
 
@@ -267,7 +344,7 @@ internal class DshHomePage : BasePager() {
                             attr {
                                 flex(1f)
                                 flexDirectionRow()
-                                backgroundColor(Color(BG))
+                                backgroundColor(theme.background)
                             }
                             vif({ ctx.isRemoteHost }) {
                                 DshSessionRail(
@@ -312,12 +389,16 @@ internal class DshHomePage : BasePager() {
                                 onUserListScroll = { ctx.onConversationUserScroll(it) },
                                 modelLabel = { ctx.selectedModelLabel },
                                 attachmentMenuVisible = { ctx.attachmentMenuVisible },
+                                stagedAttachments = { ctx.stagedAttachments },
+                                attachmentNotice = { ctx.attachmentNotice },
                                 voiceActive = { ctx.voiceActive },
                                 onOpenModels = { ctx.openModelPicker() },
-                                onToggleAttachments = {
-                                    ctx.dismissKeyboard()
-                                    ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
-                                },
+                                onToggleAttachments = { ctx.toggleAttachmentMenu() },
+                                onPickImages = { ctx.pickAttachmentImages() },
+                                onCaptureImage = { ctx.captureAttachmentImage() },
+                                onRemoveAttachment = { ctx.removeAttachment(it) },
+                                onRetryAttachment = { ctx.retryAttachment(it) },
+                                onPreviewAttachment = { ctx.previewStagedAttachment(it) },
                                 onToggleVoice = { ctx.toggleVoice() },
                                 isWebTimeline = { ctx.isRemoteHost },
                                 isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
@@ -334,7 +415,15 @@ internal class DshHomePage : BasePager() {
                                     ctx.bridgeModule.copyToPasteboard(it)
                                     ctx.bridgeModule.toast("已复制")
                                 },
+                                onLongPressMessage = { message, x, y ->
+                                    ctx.openMessageActions(message, x, y)
+                                },
+                                batchSelectionActive = { ctx.batchSelectionActive },
+                                isMessageBatchSelected = { it in ctx.batchSelectedIds },
+                                onToggleMessageBatchSelection = { ctx.toggleBatchSelection(it) },
+                                onSelectionCancelled = { ctx.selectionMessageId = "" },
                                 attachmentDataUrl = { ctx.attachmentDataUrl(it) },
+                                onOpenAttachment = { ctx.openAttachmentViewer(it) },
                                 queueItems = { ctx.queueItems },
                                 jobItems = { ctx.jobItems },
                                 goal = { ctx.goalSnapshot },
@@ -420,12 +509,16 @@ internal class DshHomePage : BasePager() {
                             onUserListScroll = { ctx.onConversationUserScroll(it) },
                             modelLabel = { ctx.selectedModelLabel },
                             attachmentMenuVisible = { ctx.attachmentMenuVisible },
+                            stagedAttachments = { ctx.stagedAttachments },
+                            attachmentNotice = { ctx.attachmentNotice },
                             voiceActive = { ctx.voiceActive },
                             onOpenModels = { ctx.openModelPicker() },
-                            onToggleAttachments = {
-                                ctx.dismissKeyboard()
-                                ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
-                            },
+                            onToggleAttachments = { ctx.toggleAttachmentMenu() },
+                            onPickImages = { ctx.pickAttachmentImages() },
+                            onCaptureImage = { ctx.captureAttachmentImage() },
+                            onRemoveAttachment = { ctx.removeAttachment(it) },
+                            onRetryAttachment = { ctx.retryAttachment(it) },
+                            onPreviewAttachment = { ctx.previewStagedAttachment(it) },
                             onToggleVoice = { ctx.toggleVoice() },
                             isWebTimeline = { ctx.isRemoteHost },
                             isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
@@ -442,7 +535,12 @@ internal class DshHomePage : BasePager() {
                                 ctx.bridgeModule.copyToPasteboard(it)
                                 ctx.bridgeModule.toast("已复制")
                             },
+                            onLongPressMessage = { message, x, y ->
+                                ctx.openMessageActions(message, x, y)
+                            },
+                            onSelectionCancelled = { ctx.selectionMessageId = "" },
                             attachmentDataUrl = { ctx.attachmentDataUrl(it) },
+                            onOpenAttachment = { ctx.openAttachmentViewer(it) },
                             queueItems = { ctx.queueItems },
                             jobItems = { ctx.jobItems },
                             goal = { ctx.goalSnapshot },
@@ -484,6 +582,9 @@ internal class DshHomePage : BasePager() {
                             onQuestionNavigate = { ctx.navigateQuestion(it) },
                             onQuestionSkip = { ctx.skipQuestion() },
                             onSubmitQuestion = { ctx.submitQuestion() },
+                            batchSelectionActive = { ctx.batchSelectionActive },
+                            isMessageBatchSelected = { it in ctx.batchSelectedIds },
+                            onToggleMessageBatchSelection = { ctx.toggleBatchSelection(it) },
                             availableWidth = ctx.pagerData.pageViewWidth,
                         )
                         ctx.perfLog("body.conversation.end wide=false")
@@ -493,7 +594,7 @@ internal class DshHomePage : BasePager() {
                         View {
                             attr {
                                 absolutePositionAllZero()
-                                backgroundColor(Color(0x55000000))
+                                backgroundColor(theme.maskLight)
                                 opacity(if (ctx.sessionDrawerMaskAnimated) 1f else 0f)
                                 animation(ctx.sessionDrawerMaskAnimation, ctx.sessionDrawerMaskAnimated)
                             }
@@ -511,6 +612,15 @@ internal class DshHomePage : BasePager() {
                         animated = { ctx.sessionDrawerAnimated },
                         onClose = { ctx.closeSessionDrawer() },
                         onOpenSettings = { ctx.openConnectionSettings() },
+                        onOpenAppearance = {
+                            ctx.closeSessionDrawer()
+                            setTimeout(ctx.pagerId, 0) { ctx.appearanceVisible = true }
+                        },
+                        onOpenPlugins = { ctx.openPlugins() },
+                        onOpenLogs = { ctx.openLogs() },
+                        archivedCount = { ctx.archivedSessions.size },
+                        onOpenArchive = { ctx.openArchiveList() },
+                        onSessionMenu = { ctx.openSessionMenu(it) },
                         onNewSession = { ctx.createSession() },
                         onSelect = { id ->
                             ctx.closeSessionDrawer()
@@ -518,6 +628,190 @@ internal class DshHomePage : BasePager() {
                                 ctx.selectSession(id)
                             }
                         },
+                    )
+                }
+
+                vif({ ctx.selectionMessageId.isNotEmpty() }) {
+                    DshSelectionBar(
+                        onCopy = { ctx.copySelection() },
+                        onSelectAll = { ctx.selectAllInMessage() },
+                        onDone = { ctx.endTextSelection() },
+                    )
+                }
+
+                vif({ ctx.batchSelectionActive }) {
+                    DshBatchSelectionBar(
+                        count = { ctx.batchSelectedIds.size },
+                        onCopy = { ctx.copyBatchSelection() },
+                        onExport = { ctx.exportBatchSelection() },
+                        onCancel = { ctx.endBatchSelection() },
+                    )
+                }
+
+                vif({ ctx.actionSheetMessageId.isNotEmpty() }) {
+                    DshMessageActionSheet(
+                        codeBlockCount = { ctx.actionSheetCodeBlockCount },
+                        formulaCount = { ctx.actionSheetFormulaCount },
+                        onSelectText = { ctx.beginTextSelection() },
+                        onSelectMessages = { ctx.beginBatchSelection() },
+                        onCopyMessage = { ctx.copyActiveMessage() },
+                        onCopyCodeBlock = { ctx.copyCodeBlock(it) },
+                        onCopyFormula = { ctx.copyFormula(it) },
+                        onExportConversation = { ctx.exportConversation() },
+                        onExportHtml = { ctx.exportConversationAsHtml() },
+                        onPrintConversation = { ctx.printConversation() },
+                        onClose = { ctx.actionSheetMessageId = "" },
+                    )
+                }
+
+                DshAttachmentViewer(
+                    ref = { ctx.attachmentViewerRef },
+                    dataUrl = { ctx.attachmentDataUrl(it) },
+                    onClose = { ctx.attachmentViewerRef = null },
+                )
+
+                vif({ ctx.sessionMenuId.isNotEmpty() }) {
+                    DshSessionActionSheet(
+                        title = { ctx.sessionTitle(ctx.sessionMenuId) },
+                        manageable = { ctx.canManageSessions() },
+                        unavailableReason = { ctx.sessionManagementUnavailableReason() },
+                        onRename = { ctx.beginRenameSession() },
+                        onArchive = { ctx.beginArchiveSession() },
+                        onClose = { ctx.closeSessionMenu() },
+                    )
+                }
+
+                vif({ ctx.renameSessionId.isNotEmpty() }) {
+                    DshRenameSessionModal(
+                        draft = { ctx.renameDraft },
+                        busy = { ctx.renameBusy },
+                        error = { ctx.renameError },
+                        inputRef = {
+                            ctx.renameInputView = it.view
+                            ctx.renameInputView?.setText(ctx.renameDraft)
+                        },
+                        onDraftChange = {
+                            ctx.renameDraft = it
+                            ctx.renameError = ""
+                        },
+                        onSave = { ctx.commitRenameSession() },
+                        onClose = { ctx.closeRenameSession() },
+                    )
+                }
+
+                vif({ ctx.archiveSessionId.isNotEmpty() }) {
+                    DshArchiveConfirmModal(
+                        title = { ctx.sessionTitle(ctx.archiveSessionId) },
+                        busy = { ctx.archiveBusy },
+                        error = { ctx.archiveError },
+                        onConfirm = { ctx.commitArchiveSession() },
+                        onClose = { ctx.closeArchiveSession() },
+                    )
+                }
+
+                vif({ ctx.archiveListVisible }) {
+                    DshArchiveListModal(
+                        sessions = { ctx.archivedSessions },
+                        onOpen = { ctx.openArchivedSession(it) },
+                        onClose = { ctx.archiveListVisible = false },
+                    )
+                }
+
+                vif({ ctx.pluginsVisible }) {
+                    DshPluginsModal(
+                        loading = { ctx.pluginsLoading },
+                        error = { ctx.pluginsError },
+                        total = { ctx.pluginTotal },
+                        failedCount = { ctx.pluginFailedCount },
+                        rows = { ctx.pluginRows },
+                        chips = { ctx.pluginStatusChips },
+                        brokenPresets = { ctx.pluginBrokenPresets },
+                        statusFilter = { ctx.pluginStatusFilter },
+                        expandedId = { ctx.pluginExpandedId },
+                        query = { ctx.pluginQuery },
+                        presetsFor = { ctx.pluginPresetsByModule[it.moduleName].orEmpty() },
+                        controllableIds = { ctx.pluginControllableIds },
+                        controlBusyId = { ctx.pluginControlBusyId },
+                        onQueryChange = {
+                            ctx.pluginQuery = it
+                            ctx.refreshPluginRows()
+                        },
+                        onSelectStatus = {
+                            ctx.pluginStatusFilter = it
+                            ctx.refreshPluginRows()
+                        },
+                        onToggleExpand = {
+                            ctx.pluginExpandedId = if (ctx.pluginExpandedId == it) "" else it
+                        },
+                        onControl = { entryId, action -> ctx.requestPluginControl(entryId, action) },
+                        onRefresh = { ctx.loadPluginInventory() },
+                        onClose = { ctx.closePlugins() },
+                    )
+                }
+
+                vif({ ctx.pluginConfirmEntryId.isNotEmpty() }) {
+                    DshConfirmModal(
+                        title = "Confirm",
+                        body = { ctx.pluginConfirmMessage },
+                        confirmLabel = "Continue",
+                        onConfirm = { ctx.commitPluginControl() },
+                        onCancel = { ctx.pluginConfirmEntryId = "" },
+                    )
+                }
+
+                vif({ ctx.logsVisible }) {
+                    DshLogCenterModal(
+                        records = { ctx.logRecords },
+                        typeChips = { ctx.logTypeChips },
+                        total = { ctx.logTotal },
+                        matched = { ctx.logMatched },
+                        now = { ctx.logNow },
+                        minLevel = { ctx.logMinLevel },
+                        eventType = { ctx.logEventType },
+                        sessionScoped = { ctx.logSessionScoped },
+                        windowMs = { ctx.logWindowMs },
+                        sessionLabel = { ctx.logSessionFilterLabel() },
+                        onQueryChange = {
+                            ctx.logQuery = it
+                            ctx.refreshLogs()
+                        },
+                        onSelectLevel = {
+                            ctx.logMinLevel = it
+                            ctx.refreshLogs()
+                        },
+                        onSelectType = {
+                            ctx.logEventType = it
+                            ctx.refreshLogs()
+                        },
+                        onToggleSession = {
+                            ctx.logSessionScoped = !ctx.logSessionScoped
+                            ctx.refreshLogs()
+                        },
+                        onSelectWindow = {
+                            ctx.logWindowMs = it
+                            ctx.refreshLogs()
+                        },
+                        onOpenRecord = { ctx.logDetail = it },
+                        onRefresh = { ctx.refreshLogs() },
+                        onExport = { ctx.exportLogs() },
+                        onClear = { ctx.clearLogs() },
+                        onClose = { ctx.closeLogs() },
+                    )
+                    DshLogDetailModal(
+                        record = { ctx.logDetail },
+                        now = { ctx.logNow },
+                        onCopy = { ctx.copyLogDetail() },
+                        onClose = { ctx.logDetail = null },
+                    )
+                }
+
+                vif({ ctx.appearanceVisible }) {
+                    DshAppearanceModal(
+                        themeMode = { ctx.currentThemeMode() },
+                        codeTheme = { ctx.currentCodeTheme() },
+                        onSelectTheme = { ctx.applyThemeMode(it) },
+                        onSelectCodeTheme = { ctx.applyCodeTheme(it) },
+                        onClose = { ctx.appearanceVisible = false },
                     )
                 }
 
@@ -557,6 +851,7 @@ internal class DshHomePage : BasePager() {
                         dshPort = { ctx.sshDshPort },
                         keyLabel = { ctx.sshKeyLabel },
                         keyPassphrase = { ctx.sshKeyPassphrase },
+                        authToken = { ctx.sshAuthToken },
                         busy = { ctx.sshSettingsBusy },
                         error = { ctx.sshSettingsError },
                         onModeChange = { ctx.setConnectionMode(it) },
@@ -566,6 +861,11 @@ internal class DshHomePage : BasePager() {
                         onDshPortChange = { ctx.sshDshPort = it; ctx.sshSettingsError = "" },
                         onPickKey = { ctx.pickSshKey() },
                         onPassphraseChange = { ctx.sshKeyPassphrase = it },
+                        onAuthTokenChange = { ctx.sshAuthToken = it; ctx.sshSettingsError = "" },
+                        onApplyAuthToken = {
+                            ctx.applyAuthToken(ctx.sshAuthToken)
+                            if (ctx.sshSettingsError.isEmpty()) ctx.updateSshSettingsVisibility(false)
+                        },
                         onTrustFingerprint = { ctx.trustSshFingerprint() },
                         onSave = { ctx.saveConnectionSettings() },
                         onClose = { ctx.updateSshSettingsVisibility(false) },
@@ -597,7 +897,7 @@ internal class DshHomePage : BasePager() {
                             allCenter()
                             paddingLeft(20f)
                             paddingRight(20f)
-                            backgroundColor(Color(0x66000000))
+                            backgroundColor(theme.mask)
                         }
                         View {
                             attr {
@@ -605,31 +905,31 @@ internal class DshHomePage : BasePager() {
                                 maxWidth(420f)
                                 padding(20f)
                                 borderRadius(16f)
-                                backgroundColor(Color.WHITE)
+                                backgroundColor(theme.surface)
                             }
-                            Text { attr { text("重命名工作区"); fontSize(18f); fontWeightBold(); color(Color(0xFF1F2933)) } }
+                            Text { attr { text("重命名工作区"); fontSize(18f); fontWeightBold(); color(theme.textPrimary) } }
                             Input {
                                 attr {
                                     height(38f)
                                     marginTop(14f)
                                     fontSize(14f)
                                     placeholder("工作区名称")
-                                    placeholderColor(Color(0xFF98A1A9))
+                                    placeholderColor(theme.placeholder)
                                     text(ctx.workspaceRenameDraft)
                                 }
                                 event { textDidChange { ctx.workspaceRenameDraft = it.text } }
                             }
                             vif({ ctx.workspaceActionError.isNotEmpty() }) {
-                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
+                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(theme.danger) } }
                             }
                             View {
                                 attr { height(40f); marginTop(18f); flexDirectionRow(); justifyContentFlexEnd() }
                                 Text {
-                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(Color(0xFF7A838A)) }
+                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(theme.textMuted) }
                                     event { click { ctx.workspaceRenameTargetId = ""; ctx.workspaceActionError = "" } }
                                 }
                                 Text {
-                                    attr { text(if (ctx.workspaceActionBusy) "保存中..." else "保存"); width(78f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(Color(0xFF4176E6)) }
+                                    attr { text(if (ctx.workspaceActionBusy) "保存中..." else "保存"); width(78f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(theme.accent) }
                                     event { click { if (!ctx.workspaceActionBusy) ctx.saveWorkspaceRename() } }
                                 }
                             }
@@ -643,7 +943,7 @@ internal class DshHomePage : BasePager() {
                             allCenter()
                             paddingLeft(20f)
                             paddingRight(20f)
-                            backgroundColor(Color(0x66000000))
+                            backgroundColor(theme.mask)
                         }
                         View {
                             attr {
@@ -651,29 +951,29 @@ internal class DshHomePage : BasePager() {
                                 maxWidth(420f)
                                 padding(20f)
                                 borderRadius(16f)
-                                backgroundColor(Color.WHITE)
+                                backgroundColor(theme.surface)
                             }
-                            Text { attr { text("删除工作区注册?"); fontSize(18f); fontWeightBold(); color(Color(0xFF1F2933)) } }
+                            Text { attr { text("删除工作区注册?"); fontSize(18f); fontWeightBold(); color(theme.textPrimary) } }
                             Text {
                                 attr {
                                     text("只会从列表移除注册，不会删除目录、会话或日志。")
                                     marginTop(8f)
                                     fontSize(13f)
                                     lineHeight(20f)
-                                    color(Color(0xFF68737D))
+                                    color(theme.textSecondary)
                                 }
                             }
                             vif({ ctx.workspaceActionError.isNotEmpty() }) {
-                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
+                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(theme.danger) } }
                             }
                             View {
                                 attr { height(40f); marginTop(18f); flexDirectionRow(); justifyContentFlexEnd() }
                                 Text {
-                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(Color(0xFF7A838A)) }
+                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(theme.textMuted) }
                                     event { click { ctx.workspaceDeleteTargetId = ""; ctx.workspaceActionError = "" } }
                                 }
                                 Text {
-                                    attr { text(if (ctx.workspaceActionBusy) "删除中..." else "删除注册"); width(112f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(Color(0xFFD25A5A)) }
+                                    attr { text(if (ctx.workspaceActionBusy) "删除中..." else "删除注册"); width(112f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(theme.danger) }
                                     event { click { if (!ctx.workspaceActionBusy) ctx.confirmWorkspaceDelete() } }
                                 }
                             }
@@ -695,6 +995,182 @@ internal class DshHomePage : BasePager() {
         addTaskWhenPagerUpdateLayoutFinish {
             refreshMountedSessionRenderTrees()
         }
+    }
+
+    // --- Task 2: selection, copy and export ------------------------------------
+
+    private fun openMessageActions(message: DshMessage, x: Float, y: Float) {
+        endTextSelection()
+        val copyable = message.role == DshMessageRole.ASSISTANT && !message.isReasoning
+        val displayed = if (copyable) displayedContentFor(message) else ""
+        actionSheetCodeBlocks = if (copyable) DshMessageExport.codeBlocks(displayed) else emptyList()
+        actionSheetCodeBlockCount = actionSheetCodeBlocks.size
+        actionSheetFormulas = if (copyable) DshLatex.sources(displayed) else emptyList()
+        actionSheetFormulaCount = actionSheetFormulas.size
+        actionSheetPoint = x to y
+        actionSheetMessageId = message.id
+    }
+
+    /** The row as painted, so copying a streaming reply matches what is on screen. */
+    private fun displayedContentFor(message: DshMessage): String = dshDisplayedAssistantContent(
+        stored = sessionMessageState(activeSessionId).firstOrNull { it.id == message.id }?.content
+            ?: message.content,
+        live = streamingAssistantContent,
+        isLiveRow = streamingAssistantId == message.id,
+    )
+
+    private fun actionSheetMessage(): DshMessage? =
+        sessionMessageState(activeSessionId).firstOrNull { it.id == actionSheetMessageId }
+
+    private fun copyActiveMessage() {
+        val message = actionSheetMessage() ?: return
+        val rendered = if (message.role == DshMessageRole.ASSISTANT && !message.isReasoning) {
+            message.copy(content = displayedContentFor(message))
+        } else {
+            message
+        }
+        val text = DshMessageExport.message(rendered)
+        actionSheetMessageId = ""
+        if (text.isEmpty()) {
+            bridgeModule.toast("Nothing to copy")
+            return
+        }
+        bridgeModule.copyToPasteboard(text)
+        bridgeModule.toast("Message copied")
+    }
+
+    private fun copyCodeBlock(index: Int) {
+        val block = actionSheetCodeBlocks.getOrNull(index)
+        actionSheetMessageId = ""
+        if (block == null) return
+        bridgeModule.copyToPasteboard(block.code)
+        bridgeModule.toast("Code copied")
+    }
+
+    /** The LaTeX source, not the Unicode the row paints. */
+    private fun copyFormula(index: Int) {
+        val formula = actionSheetFormulas.getOrNull(index)
+        actionSheetMessageId = ""
+        if (formula == null) return
+        bridgeModule.copyToPasteboard(formula)
+        bridgeModule.toast("Formula copied")
+    }
+
+    private fun exportConversation() {
+        val (title, rows) = exportables() ?: return
+        bridgeModule.shareText(title, DshMessageExport.conversation(title, rows))
+    }
+
+    private fun exportConversationAsHtml() {
+        val (title, rows) = exportables() ?: return
+        bridgeModule.shareHtml(title, DshMessageExport.html(title, rows))
+    }
+
+    /** The print sheet's "Save as PDF" destination is how the transcript becomes a PDF. */
+    private fun printConversation() {
+        val (title, rows) = exportables() ?: return
+        bridgeModule.printHtml(title, DshMessageExport.html(title, rows))
+    }
+
+    // --- Task 2 bonus: batch selection across messages -------------------------
+
+    private fun beginBatchSelection() {
+        val messageId = actionSheetMessageId
+        actionSheetMessageId = ""
+        endTextSelection()
+        batchSelectedIds = if (messageId.isEmpty()) emptySet() else setOf(messageId)
+        batchSelectionActive = true
+    }
+
+    private fun toggleBatchSelection(messageId: String) {
+        batchSelectedIds = if (messageId in batchSelectedIds) {
+            batchSelectedIds - messageId
+        } else {
+            batchSelectedIds + messageId
+        }
+    }
+
+    private fun endBatchSelection() {
+        batchSelectionActive = false
+        batchSelectedIds = emptySet()
+    }
+
+    /** The picked rows in timeline order, so a batch export reads like the conversation. */
+    private fun batchSelectedMessages(): List<DshMessage> =
+        sessionMessageState(activeSessionId).filter { it.id in batchSelectedIds }
+
+    private fun copyBatchSelection() {
+        val rows = batchSelectedMessages()
+        if (rows.isEmpty()) {
+            bridgeModule.toast("Nothing selected")
+            return
+        }
+        val text = rows.mapNotNull { DshMessageExport.transcriptEntry(it) }.joinToString("\n\n")
+        endBatchSelection()
+        bridgeModule.copyToPasteboard(text)
+        bridgeModule.toast(if (rows.size == 1) "1 message copied" else "${rows.size} messages copied")
+    }
+
+    private fun exportBatchSelection() {
+        val rows = batchSelectedMessages()
+        if (rows.isEmpty()) {
+            bridgeModule.toast("Nothing selected")
+            return
+        }
+        val title = sessions.firstOrNull { it.id == activeSessionId }?.title.orEmpty()
+            .ifEmpty { "DSH conversation" }
+        endBatchSelection()
+        bridgeModule.shareText(title, DshMessageExport.conversation(title, rows))
+    }
+
+    /** Closes the sheet and yields the title and rows, or null when there is nothing to send. */
+    private fun exportables(): Pair<String, List<DshMessage>>? {
+        val title = sessions.firstOrNull { it.id == activeSessionId }?.title.orEmpty()
+        val rows = sessionMessageState(activeSessionId).toList()
+        actionSheetMessageId = ""
+        if (rows.isEmpty()) {
+            bridgeModule.toast("This conversation is empty")
+            return null
+        }
+        return title.ifEmpty { "DSH conversation" } to rows
+    }
+
+    private fun beginTextSelection() {
+        val messageId = actionSheetMessageId
+        val (x, y) = actionSheetPoint
+        actionSheetMessageId = ""
+        if (messageId.isEmpty()) return
+        selectionMessageId = messageId
+        // The modal has to be gone before the native selector takes focus.
+        setTimeout(pagerId, 60) {
+            selectionRowView()?.createSelection(x, y, SelectionType.WORD)
+        }
+    }
+
+    private fun selectionRowView(): com.tencent.kuikly.core.views.DivView? =
+        messageRowRefs[messageRowKey(activeSessionId, selectionMessageId)]?.view
+
+    private fun copySelection() {
+        val view = selectionRowView() ?: return
+        view.getSelection { result ->
+            val text = result.content.joinToString("\n").trim()
+            if (text.isEmpty()) {
+                bridgeModule.toast("Nothing selected")
+                return@getSelection
+            }
+            bridgeModule.copyToPasteboard(text)
+            bridgeModule.toast("Selection copied")
+        }
+    }
+
+    private fun selectAllInMessage() {
+        selectionRowView()?.createSelectionAll()
+    }
+
+    private fun endTextSelection() {
+        if (selectionMessageId.isEmpty()) return
+        selectionRowView()?.clearSelection()
+        selectionMessageId = ""
     }
 
     private fun openSessionDrawer() {
@@ -761,6 +1237,10 @@ internal class DshHomePage : BasePager() {
                         ?: loaded.first().id
                 }
                 refreshWorkspaceGroups()
+                // The cold-connect path builds the lists here rather than through
+                // refreshSessionsFromStore, so the archive list needs its own refresh or
+                // it stays empty until an unrelated Host frame arrives.
+                refreshArchivedSessions()
                 if (nextId == null) {
                     messages = ObservableList()
                     createSession()
@@ -805,6 +1285,17 @@ internal class DshHomePage : BasePager() {
                 startRelayEngine(generation)
                 return
             }
+            DshConnectionMode.DIRECT -> {
+                if (directBaseUrl.isBlank()) {
+                    connectionLabel = "请配置直连地址"
+                    openConnectionSetup()
+                    return
+                }
+                engineReady = true
+                connectionLabel = "正在直连 DSH"
+                connectRemoteEngine(directBaseUrl.trimEnd('/'))
+                return
+            }
             DshConnectionMode.LOCAL -> {
                 connectionLabel = "本地模式已独立为 DSH Local App"
                 return
@@ -820,7 +1311,36 @@ internal class DshHomePage : BasePager() {
         sshDshPort = profile?.remoteDshPort?.toString() ?: "3080"
         sshKeyId = profile?.keyId.orEmpty()
         sshFingerprint = profile?.hostFingerprint.orEmpty()
+        sshAuthToken = profile?.authToken.orEmpty()
         sshKeyLabel = if (sshKeyId.isEmpty()) "未导入私钥" else "已导入私钥"
+    }
+
+    private fun currentSshProfile(): DshRemoteProfile = DshRemoteProfile(
+        host = sshHost.trim(),
+        sshPort = sshPort.toIntOrNull() ?: 22,
+        username = sshUser.trim(),
+        remoteDshPort = sshDshPort.toIntOrNull() ?: 3080,
+        keyId = sshKeyId,
+        hostFingerprint = sshFingerprint,
+        authToken = sshAuthToken.trim(),
+    )
+
+    /** The user pasted a new `dsh web` token: persist it, drop the stale cookie, reconnect. */
+    private fun applyAuthToken(rawToken: String) {
+        val token = dshExtractLaunchToken(rawToken)
+        sshAuthToken = token
+        when (connectionMode) {
+            DshConnectionMode.SSH -> runCatching { localStore?.saveRemoteProfile(currentSshProfile()) }
+            DshConnectionMode.DIRECT -> {
+                directAuthToken = token
+                runCatching { localStore?.saveSetting(DIRECT_AUTH_TOKEN_KEY, token) }
+            }
+            else -> Unit
+        }
+        authenticator?.updateLaunchToken(token)
+        authenticator?.onCookie("")
+        (repository as? DshRemoteRepository)?.retryAuthentication()
+        sshSettingsError = if (token.isEmpty()) "请粘贴 dsh web 打印的 token 或完整 URL" else ""
     }
 
 
@@ -919,12 +1439,36 @@ internal class DshHomePage : BasePager() {
 
     private fun connectRemoteEngine(baseUrl: String, token: String = "") {
         (repository as? DshRemoteRepository)?.stop()
+        val auth = DshStoredHostAuthenticator(
+            scopeKey = activeConnectionId,
+            store = localStore,
+            initialToken = when (connectionMode) {
+                DshConnectionMode.SSH -> dshExtractLaunchToken(sshAuthToken)
+                DshConnectionMode.DIRECT -> dshExtractLaunchToken(directAuthToken)
+                else -> ""
+            },
+            // Direct mode also tries the plugin route so the mock Host works without pasting a token.
+            relayTokenAvailable = connectionMode == DshConnectionMode.RELAY || connectionMode == DshConnectionMode.DIRECT,
+            mintCookie = { base, launchToken, bearer, callback ->
+                bridgeModule.mintAuthCookie(base, launchToken, bearer) { cookie, error ->
+                    setTimeout(pagerId, 0) { callback(cookie, error) }
+                }
+            },
+        )
+        authenticator = auth
         repository = DshRemoteRepository(
             network = acquireModule<NetworkModule>(NetworkModule.MODULE_NAME),
             webSocket = acquireModule<DshWebSocketModule>(DshWebSocketModule.MODULE_NAME),
             connection = DshHostConnection(baseUrl, token),
+            auth = auth,
             pagerId = pagerId,
             onState = { state -> handleHostRuntimeState(state) },
+            onSessionsChanged = { refreshSessionsFromStore() },
+            onSessionError = { sessionId, message ->
+                if (sessionId == activeSessionId && message.isNotEmpty()) {
+                    messages.add(DshMessage("session-error-${messages.size}", DshMessageRole.ERROR, message))
+                }
+            },
             onQueueSnapshot = { sessionId ->
                 if (sessionId == activeSessionId) {
                     refreshQueueDock()
@@ -947,15 +1491,10 @@ internal class DshHomePage : BasePager() {
                     syncTurnStatusTicker()
                 }
             },
-            onProjection = { sessionId, key, value, seq ->
-                if (sessionId == activeSessionId) {
-                    when (key) {
-                        "title" -> {
-                            val title = value.trim().removeSurrounding("\"")
-                            if (title.isNotEmpty()) connectionLabel = title
-                        }
-                        "goal" -> goalSnapshot = parseGoalProjection(value)
-                    }
+            onProjection = { sessionId, key, value, _ ->
+                // Titles reach the header through the session list; the goal panel has no other source.
+                if (sessionId == activeSessionId && key == "goal") {
+                    goalSnapshot = parseGoalProjection(value)
                 }
             },
             onSessionEvent = { sessionId, event ->
@@ -982,60 +1521,65 @@ internal class DshHomePage : BasePager() {
                 }
             },
         )
-        loadRepository(preferredSessionId = activeSessionId)
     }
 
     private fun handleHostRuntimeState(state: DshHostRuntimeState) {
         if (!connectionCoordinator.isActive(connectionMode)) return
-        val wasReconnecting = isReconnectLabel(connectionLabel)
+        val previousPhase = hostRuntimePhase
+        hostRuntimePhase = state.phase
         connectionLabel = when (state.phase) {
-            DshHostRuntimePhase.CONNECTING -> "正在打开远程事件流"
+            DshHostRuntimePhase.CONNECTING -> state.message.ifEmpty { "正在打开远程事件流" }
             DshHostRuntimePhase.HOST_HANDSHAKE -> "正在检查远程 DSH"
             DshHostRuntimePhase.SYNCING -> "正在同步远程会话"
             DshHostRuntimePhase.READY -> "远程 DSH 已就绪"
             DshHostRuntimePhase.RECONNECTING -> reconnectLabel()
+            DshHostRuntimePhase.AUTH_REQUIRED -> AUTH_REQUIRED_LABEL
             DshHostRuntimePhase.ERROR -> "远程 DSH 连接失败"
             DshHostRuntimePhase.STOPPED -> "远程 DSH 已停止"
             DshHostRuntimePhase.DISCONNECTED -> "等待远程连接"
         }
-        if (state.phase == DshHostRuntimePhase.READY && wasReconnecting) {
+        if (state.phase == DshHostRuntimePhase.AUTH_REQUIRED) {
+            // The Host wants a browser-session cookie we cannot mint: ask for the launch token.
+            sshSettingsError = state.message.ifEmpty { "请粘贴 dsh web 打印的 token" }
+            openConnectionSettings(preserveError = true)
+        }
+        // Every generation starts with an empty session baseline, so the list has to be
+        // re-read on the first connect and after each reconnect or re-login.
+        if (state.phase == DshHostRuntimePhase.READY && previousPhase != DshHostRuntimePhase.READY) {
             loadRepository(preferredSessionId = activeSessionId)
         }
         syncTurnStatusTicker()
     }
 
-    private fun connectLocalEngine(apiKey: String) {
-        connectionLabel = "本地内核启动中"
-        repository = DshHostRepository(
-            network = acquireModule<NetworkModule>(NetworkModule.MODULE_NAME),
-            sse = acquireModule<DshSseModule>(DshSseModule.MODULE_NAME),
-            connection = DshHostConnection(LOCAL_ENGINE_URL),
-            pagerId = pagerId,
-        )
-        syncLocalCredential(apiKey, 0)
-    }
-
-    private fun syncLocalCredential(apiKey: String, attempt: Int) {
-        val hostRepository = repository ?: return
-        hostRepository.saveDeepSeekApiKey(apiKey, {
-            connectionLabel = "已连接"
-            loadRepository()
-        }, { error ->
-            if (attempt < ENGINE_CONNECT_RETRIES) {
-                connectionLabel = "本地内核启动中"
-                setTimeout(pagerId, ENGINE_RETRY_DELAY_MS) {
-                    syncLocalCredential(apiKey, attempt + 1)
-                }
-            } else {
-                connectionLabel = "内核启动失败"
-                messages.clear()
-                messages.add(DshMessage(
-                    "engine-start-error",
-                    DshMessageRole.ERROR,
-                    "本地 DeepSeek Harness 内核暂未就绪：$error",
-                ))
+    /** Host-pushed list changes (added / removed / activity / archive) arrive without an RPC round trip. */
+    private fun refreshSessionsFromStore() {
+        val remote = repository as? DshRemoteRepository ?: return
+        if (!connectionCoordinator.isActive(connectionMode)) return
+        val loaded = remote.store.sessions.values.toList()
+        val loadedIds = loaded.map { it.id }.toSet()
+        sessions.map { it.id }.filterNot { loadedIds.contains(it) }.forEach {
+            sessionMessageStates.remove(it)
+            sessionCacheStates.remove(it)
+            sessionMessageReady.remove(it)
+            conversationPanelIds.remove(it)
+        }
+        val current = sessions.toList()
+        if (current != loaded) {
+            sessions.clear()
+            sessions.addAll(loaded)
+            refreshVisibleSessions()
+            runCatching { localStore?.replaceSessions(activeConnectionId, loaded) }
+        }
+        refreshWorkspaceGroups()
+        // The Host's `archived` frame lands here too, so the archive list and its count
+        // follow the Host rather than a local copy.
+        refreshArchivedSessions()
+        loaded.forEach { session ->
+            if (!sessionMessageReady.contains(session.id) && !sessionMessageStates.containsKey(session.id)) {
+                sessionMessageState(session.id, loadFromDisk = false)
+                sessionMessageReady.add(session.id)
             }
-        })
+        }
     }
 
     private fun saveDeepSeekApiKey() {
@@ -1052,56 +1596,34 @@ internal class DshHomePage : BasePager() {
         }
         credentialSetupBusy = true
         credentialSetupError = ""
-        if (sshMode) {
-            val hostRepository = repository
-            if (hostRepository == null) {
-                credentialSetupBusy = false
-                credentialSetupError = "远程 DSH 尚未就绪"
-                return
-            }
-            hostRepository.saveDeepSeekApiKey(key, {
-                setTimeout(pagerId, 0) {
-                    apiKeyDraft = ""
-                    apiKeyInputView?.setText("")
-                    credentialSetupBusy = false
-                    updateCredentialSetupVisibility(false)
-                    dismissKeyboard()
-                    connectionLabel = "远程 DSH 已更新"
-                    loadRepository()
-                }
-            }, { error ->
-                setTimeout(pagerId, 0) {
-                    credentialSetupBusy = false
-                    credentialSetupError = "无法修改电脑端 DSH：$error"
-                }
-            })
-            return
-        }
-        val saved = runCatching { localStore?.saveApiKey(key) }
-        if (saved.isFailure || localStore == null) {
+        val hostRepository = repository
+        if (hostRepository == null) {
             credentialSetupBusy = false
-            credentialSetupError = saved.exceptionOrNull()?.message ?: "本地数据库不可用"
+            credentialSetupError = "远程 DSH 尚未就绪"
             return
         }
-        apiKeyDraft = ""
-        apiKeyInputView?.setText("")
-        credentialSetupBusy = false
-        credentialSetupError = ""
-        updateCredentialSetupVisibility(false)
-        dismissKeyboard()
-        pendingApiKey = key
-        if (engineReady) {
-            connectLocalEngine(key)
-        } else {
-            connectionLabel = "等待本地内核启动"
-        }
+        hostRepository.saveDeepSeekApiKey(key, {
+            setTimeout(pagerId, 0) {
+                apiKeyDraft = ""
+                apiKeyInputView?.setText("")
+                credentialSetupBusy = false
+                updateCredentialSetupVisibility(false)
+                dismissKeyboard()
+                connectionLabel = "远程 DSH 已更新"
+                loadRepository()
+            }
+        }, { error ->
+            setTimeout(pagerId, 0) {
+                credentialSetupBusy = false
+                credentialSetupError = "无法修改电脑端 DSH：$error"
+            }
+        })
     }
 
     private fun openCredentialSettings() {
         dismissKeyboard()
         attachmentMenuVisible = false
-        //closeSessionDrawer()
-        credentialSetupTitle = if (sshMode) "修改电脑端 DSH 的 API Key" else "设置 DeepSeek API Key"
+        credentialSetupTitle = "修改电脑端 DSH 的 API Key"
         credentialSetupError = ""
         apiKeyDraft = pendingApiKey
         updateCredentialSetupVisibility(true)
@@ -1148,16 +1670,7 @@ internal class DshHomePage : BasePager() {
     private fun trustSshFingerprint() {
         if (sshFingerprint.isBlank()) return
         acquireModule<DshEngineModule>(DshEngineModule.MODULE_NAME).trustSshFingerprint(sshFingerprint)
-        runCatching {
-            localStore?.saveRemoteProfile(DshRemoteProfile(
-                host = sshHost.trim(),
-                sshPort = sshPort.toIntOrNull() ?: 22,
-                username = sshUser.trim(),
-                remoteDshPort = sshDshPort.toIntOrNull() ?: 3080,
-                keyId = sshKeyId,
-                hostFingerprint = sshFingerprint,
-            ))
-        }
+        runCatching { localStore?.saveRemoteProfile(currentSshProfile()) }
         sshSettingsError = "正在使用已确认的主机指纹连接"
     }
 
@@ -1172,14 +1685,8 @@ internal class DshHomePage : BasePager() {
                 dshPort == null || dshPort !in 1..65535 -> sshSettingsError = "远程 DSH 端口无效"
                 sshKeyId.isBlank() -> sshSettingsError = "请先导入 SSH 私钥"
                 else -> {
-                    runCatching { localStore?.saveRemoteProfile(DshRemoteProfile(
-                        host = sshHost.trim(),
-                        sshPort = port,
-                        username = sshUser.trim(),
-                        remoteDshPort = dshPort,
-                        keyId = sshKeyId,
-                        hostFingerprint = sshFingerprint,
-                    )) }
+                    sshAuthToken = dshExtractLaunchToken(sshAuthToken)
+                    runCatching { localStore?.saveRemoteProfile(currentSshProfile()) }
                     runCatching { localStore?.saveLastConnectionMode(DshConnectionMode.SSH) }
                     updateSshSettingsVisibility(false)
                     stopCurrentEngine()
@@ -1208,6 +1715,7 @@ internal class DshHomePage : BasePager() {
             DshConnectionMode.RELAY -> acquireModule<DshRelayModule>(DshRelayModule.MODULE_NAME).disconnect()
             DshConnectionMode.SSH -> engineModule?.stopSsh()
             DshConnectionMode.LOCAL -> engineModule?.stop()
+            DshConnectionMode.DIRECT -> Unit
         }
         engineReady = false
     }
@@ -1271,16 +1779,8 @@ internal class DshHomePage : BasePager() {
         val startedAt = TimeSource.Monotonic.markNow()
         perfLog("newSession.$traceId.click", startedAt)
         val hostRepository = repository ?: run {
-            if (isRemoteHost) {
-                closeSessionDrawer()
-                bridgeModule.toast("未连接到远程 DSH")
-            } else if (pendingApiKey.isEmpty()) {
-                connectionLabel = "请先配置 API Key"
-                openCredentialSettings()
-            } else {
-                closeSessionDrawer()
-                connectionLabel = "本地 DSH 尚未就绪"
-            }
+            closeSessionDrawer()
+            bridgeModule.toast("未连接到远程 DSH")
             return
         }
         dismissKeyboard()
@@ -1308,7 +1808,9 @@ internal class DshHomePage : BasePager() {
         }
         perfLog("newSession.$traceId.ui.cleared", startedAt)
         perfLog("newSession.$traceId.host.create.request", startedAt)
+        sessionCreateInFlight = true
         hostRepository.createSession(currentWorkspaceId, { sessionId ->
+            sessionCreateInFlight = false
             perfLog("newSession.$traceId.host.create.response:$sessionId", startedAt)
             val created = DshSession(
                 id = sessionId,
@@ -1330,16 +1832,26 @@ internal class DshHomePage : BasePager() {
             sessionMessageReady.add(sessionId)
             ensureConversationPanel(sessionId)
             perfLog("newSession.$traceId.ui.ready", startedAt)
-            draft = ""
-            inputView?.setText("")
+            // A send that arrived while this create was in flight kept its draft; do
+            // not clear it, or the queued turn is lost.
+            if (!pendingSendAfterCreate) {
+                draft = ""
+                inputView?.setText("")
+            }
             applyActiveSessionChrome()
             setTimeout(pagerId, 0) {
                 if (activeSessionId == sessionId) {
                     loadSkills(sessionId)
                     loadModels(sessionId)
                 }
+                if (pendingSendAfterCreate) {
+                    pendingSendAfterCreate = false
+                    sendDraft()
+                }
             }
         }, { error ->
+            sessionCreateInFlight = false
+            pendingSendAfterCreate = false
             perfLog("newSession.$traceId.host.create.error:$error", startedAt)
             connectionLabel = "新会话创建失败"
             messages.add(DshMessage("session-create-error-${messages.size}", DshMessageRole.ERROR, error))
@@ -1367,35 +1879,10 @@ internal class DshHomePage : BasePager() {
         sessionId: String,
         scrollToEndAfterLoad: Boolean = true,
     ) {
-        if (isRemoteHost) {
-            loadSkills(sessionId)
-            loadWebTimeline(sessionId, scrollToEndAfterLoad)
-            return
-        }
-
-        val requestGeneration = historyRequestGeneration
-        val hostRepository = repository ?: return
-        hostRepository.loadHistory(sessionId, { loaded ->
-            if (requestGeneration != historyRequestGeneration || activeSessionId != sessionId) return@loadHistory
-            sessionMessageReady.add(sessionId)
-            sessionCacheStates[sessionId] = DshSessionCacheState.SYNCED
-            replaceMessagesIfChanged(loaded)
-            runCatching { localStore?.replaceMessages(activeConnectionId, sessionId, loaded) }
-            completePendingSessionSelection(sessionId)
-            realizeSessionAfterData(sessionId, scrollToEndAfterLoad)
-        }, { error ->
-            if (requestGeneration != historyRequestGeneration || activeSessionId != sessionId) return@loadHistory
-            if (messages.isNotEmpty()) {
-                if (isRemoteHost) {
-                    sessionCacheStates[sessionId] = DshSessionCacheState.SYNC_FAILED
-                    connectionLabel = "远程历史同步失败 · 已显示缓存"
-                } else {
-                    connectionLabel = "内核连接失败 · 已显示缓存"
-                }
-            } else {
-                messages.add(DshMessage("history-error", DshMessageRole.ERROR, error))
-            }
-        })
+        loadSkills(sessionId)
+        // Bound the number of live `session/follow` streams to the mounted panels.
+        (repository as? DshRemoteRepository)?.trimFollows(conversationPanelIds.toSet() + sessionId)
+        loadWebTimeline(sessionId, scrollToEndAfterLoad)
     }
 
     private fun loadWebTimeline(
@@ -1409,7 +1896,12 @@ internal class DshHomePage : BasePager() {
             if (!isRemoteHost || activeSessionId != sessionId) return@loadWebTimeline
             val projected = items.map { item ->
                 when (item.kind) {
-                    DshWebTimelineItem.Kind.USER -> DshMessage(item.key, DshMessageRole.USER, item.text)
+                    DshWebTimelineItem.Kind.USER -> DshMessage(
+                        item.key,
+                        DshMessageRole.USER,
+                        item.text,
+                        attachments = item.attachments,
+                    )
                     DshWebTimelineItem.Kind.ASSISTANT -> DshMessage(item.key, DshMessageRole.ASSISTANT, item.text)
                     DshWebTimelineItem.Kind.REASONING -> DshMessage(
                         item.key,
@@ -1462,7 +1954,14 @@ internal class DshHomePage : BasePager() {
                 persistMessages(sessionId)
                 sessionCacheStates[sessionId] = DshSessionCacheState.SYNCED
             }
+            // Restore both the assistant's image blocks and the images a user turn
+            // carried, by `attachmentId` through `session/attachment` (Task 3 criterion 6).
             projected.mapNotNull { it.attachmentId }.forEach { loadAttachment(sessionId, it) }
+            projected.flatMap { it.attachments }
+                .map { it.attachmentId }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .forEach { loadAttachment(sessionId, it) }
             completePendingSessionSelection(sessionId)
             realizeSessionAfterData(sessionId, scrollToEndAfterLoad)
             afterApply()
@@ -1588,7 +2087,10 @@ internal class DshHomePage : BasePager() {
             onComplete = { result ->
                 if (!connectionCoordinator.isActive(connectionMode)) return@adoptLiveStream
                 flushAssistantDelta()
-                if (streamingAssistantId.isEmpty() && result.isNotEmpty()) {
+                // Only stand a row up here for a reply that never streamed and was never
+                // projected from a committed assistant/message; otherwise the turn-wide
+                // accumulator is appended a second time as an extra bubble.
+                if (streamingAssistantId.isEmpty() && result.isNotEmpty() && !assistantBlocksProjected) {
                     ensureStreamingAssistantSegment()
                 }
                 val completedContent = streamingAssistantContent.ifEmpty { result }
@@ -1609,7 +2111,7 @@ internal class DshHomePage : BasePager() {
                 flushAssistantDelta()
                 ensureStreamingAssistantSegment()
                 DshStreamLog.i("ui.error session=$sessionId message='${DshStreamLog.preview(error)}'")
-                settleStreamingMessage(DshMessageRole.ERROR, error)
+                settleFailedTurn(error)
                 persistMessages(sessionId)
                 connectionLabel = "已连接"
                 streamHandle = null
@@ -1634,11 +2136,16 @@ internal class DshHomePage : BasePager() {
     private fun loadAttachment(sessionId: String, attachmentId: String) {
         if (attachmentDataUrl(attachmentId) != null || !pendingAttachmentReads.add(attachmentId)) return
         val hostRepository = repository as? DshRemoteRepository ?: return
+        DshStreamLog.i("ui.attachment.read session=$sessionId attachment=$attachmentId")
         hostRepository.loadAttachment(sessionId, attachmentId) { dataUrl, error ->
             if (error != null || dataUrl == null) {
+                DshStreamLog.i(
+                    "ui.attachment.read-fail attachment=$attachmentId error='${DshStreamLog.preview(error.orEmpty())}'",
+                )
                 pendingAttachmentReads.remove(attachmentId)
                 return@loadAttachment
             }
+            DshStreamLog.i("ui.attachment.read-ok attachment=$attachmentId chars=${dataUrl.length}")
             cachedAttachmentDataUrls[attachmentId] = dataUrl
             attachmentRevision += 1
             val next = sessionMessageState(sessionId).toList()
@@ -1697,6 +2204,13 @@ internal class DshHomePage : BasePager() {
         val payload = runCatching { JSONObject(event.raw) }.getOrNull() ?: return
         val data = dshWireEvent(payload).optJSONObject("data") ?: return
         val blocks = (data.optJSONObject("message") ?: data).optJSONArray("content") ?: return
+        // One committed assistant/message is one model call, so the live row that was
+        // streaming it has to close here the way it does before a tool card. Without
+        // that the projection of a multi-step turn ends up with fewer rows than the
+        // durable timeline, and the index-wise applyMessagesInPlace patch that follows
+        // shifts content between rows (vforLazy never rebuilds the last one).
+        val streamedRowSealed = splitStreamingAssistantBeforeTool()
+        assistantBlocksProjected = true
         for (index in 0 until blocks.length()) {
             val block = blocks.optJSONObject(index) ?: continue
             when (block.optString("type")) {
@@ -1714,7 +2228,19 @@ internal class DshHomePage : BasePager() {
                     }
                     loadAttachment(activeSessionId, attachmentId)
                 }
-                "text", "reasoning", "tool-call" -> Unit
+                // A step the Host composed itself (the image echo, for one) commits text
+                // that never arrived as a delta, so there is no sealed row to reuse and
+                // the block has to become its own row to keep the two shapes aligned.
+                "text" -> {
+                    if (streamedRowSealed) continue
+                    val text = block.optString("text")
+                    if (text.isEmpty()) continue
+                    val id = "text-${event.seq}-$index"
+                    if (messages.none { it.id == id }) {
+                        messages.add(DshMessage(id, DshMessageRole.ASSISTANT, text))
+                    }
+                }
+                "reasoning", "tool-call" -> Unit
                 else -> {
                     val id = "block-${event.seq}-$index"
                     if (messages.none { it.id == id }) {
@@ -1729,6 +2255,7 @@ internal class DshHomePage : BasePager() {
                 }
             }
         }
+        refreshSessionRenderTree(activeSessionId)
         scrollMessagesToEnd()
     }
 
@@ -2044,24 +2571,382 @@ internal class DshHomePage : BasePager() {
         }
     }
 
-    private fun renameActiveSession() {
+    // ---------------------------------------------------------------- Task 4
+
+    /** Whether `session/rename` and `workspace/archiveSession` can be reached right now. */
+    private fun canManageSessions(): Boolean =
+        isRemoteHost && (repository as? DshRemoteRepository)?.isProductReady() == true
+
+    private fun sessionManagementUnavailableReason(): String = when {
+        !isRemoteHost -> "Only a remote DSH Host can rename or archive conversations."
+        else -> "Not connected to the Host yet. Reconnect and try again."
+    }
+
+    private fun sessionTitle(sessionId: String): String =
+        sessions.firstOrNull { it.id == sessionId }?.title.orEmpty().ifEmpty { "Untitled" }
+
+    private fun openSessionMenu(sessionId: String) {
+        sessionMenuId = sessionId
+    }
+
+    private fun closeSessionMenu() {
+        sessionMenuId = ""
+    }
+
+    private fun beginRenameSession() {
+        val sessionId = sessionMenuId.ifEmpty { activeSessionId }
+        if (sessionId.isEmpty()) return
+        closeSessionMenu()
+        renameSessionId = sessionId
+        renameError = ""
+        renameBusy = false
+        renameDraft = sessionTitle(sessionId).takeUnless { it == "Untitled" || it == "尚无标题" || it == "新会话" }.orEmpty()
+        setTimeout(pagerId, 0) { renameInputView?.setText(renameDraft) }
+    }
+
+    private fun closeRenameSession() {
+        dismissKeyboard()
+        renameSessionId = ""
+        renameDraft = ""
+        renameError = ""
+        renameBusy = false
+        renameInputView = null
+    }
+
+    /**
+     * The Host is the authority on titles, so the draft goes out as typed and a
+     * `session/title-invalid` answer is mapped to readable copy (Task 4 criterion 1).
+     */
+    private fun commitRenameSession() {
         val repository = repository as? DshRemoteRepository ?: return
-        val current = sessions.firstOrNull { it.id == activeSessionId } ?: return
-        val title = current.title.takeIf { it != "尚无标题" && it != "新会话" } ?: ""
-        if (title.isBlank()) return
-        repository.renameSession(activeSessionId, title) { _, _ ->
-            setTimeout(pagerId, 0) { loadRepository(preferredSessionId = activeSessionId) }
+        val sessionId = renameSessionId
+        if (sessionId.isEmpty() || renameBusy) return
+        renameBusy = true
+        renameError = ""
+        repository.renameSession(sessionId, renameDraft) { value, error ->
+            setTimeout(pagerId, 0) {
+                renameBusy = false
+                if (error != null || value == null) {
+                    renameError = dshSessionErrorMessage(error)
+                    return@setTimeout
+                }
+                closeRenameSession()
+                // The title projection reaches the store on its own; refreshing here makes
+                // the drawer and the header show it without waiting for the next frame.
+                refreshSessionsFromStore()
+            }
         }
     }
 
-    private fun archiveActiveSession() {
+    private fun beginArchiveSession() {
+        val sessionId = sessionMenuId.ifEmpty { activeSessionId }
+        if (sessionId.isEmpty()) return
+        closeSessionMenu()
+        archiveSessionId = sessionId
+        archiveError = ""
+        archiveBusy = false
+    }
+
+    private fun closeArchiveSession() {
+        archiveSessionId = ""
+        archiveError = ""
+        archiveBusy = false
+    }
+
+    /**
+     * `workspace/archiveSession` only adds the id to the Host's archive set. On success
+     * the store's `archivedSessionIds` hides the row; if it was the open conversation the
+     * page moves to the first unarchived one so it never sits on an empty error state
+     * (criterion 4). On failure nothing about the list changes (criterion 5).
+     */
+    private fun commitArchiveSession() {
         val repository = repository as? DshRemoteRepository ?: return
-        repository.archiveSession(activeSessionId) { _, _ ->
+        val sessionId = archiveSessionId
+        if (sessionId.isEmpty() || archiveBusy) return
+        archiveBusy = true
+        archiveError = ""
+        repository.archiveSession(sessionId) { value, error ->
             setTimeout(pagerId, 0) {
-                loadRepository(preferredSessionId = null)
-                refreshWorkspaceGroups()
+                archiveBusy = false
+                if (error != null || value == null) {
+                    archiveError = dshSessionErrorMessage(error)
+                    return@setTimeout
+                }
+                closeArchiveSession()
+                closeSessionDrawer()
+                refreshSessionsFromStore()
+                refreshArchivedSessions()
+                if (activeSessionId == sessionId) moveOffArchivedSession(sessionId)
             }
         }
+    }
+
+    /**
+     * Leaves an archived conversation for the first one still in the main list. The
+     * fallback has to exclude the archive set as well: `sessions` is the raw Host list,
+     * so without that filter archiving the last unarchived conversation would land on
+     * another archived one.
+     */
+    private fun moveOffArchivedSession(archivedId: String) {
+        val archivedIds = archivedSessions.map { it.id }.toSet() + archivedId
+        val next = workspaceGroups.flatMap { it.sessions }.firstOrNull { it.id !in archivedIds }
+            ?: sessions.firstOrNull { it.id !in archivedIds && !it.blank }
+        if (next != null) {
+            selectSession(next.id)
+        } else {
+            // Nothing left to show; a blank conversation beats an empty error state.
+            createSession()
+        }
+    }
+
+    private fun refreshArchivedSessions() {
+        val repository = repository as? DshRemoteRepository ?: return
+        val archived = repository.archivedSessions()
+        archivedSessions.clear()
+        archivedSessions.addAll(archived)
+    }
+
+    private fun openArchiveList() {
+        refreshArchivedSessions()
+        closeSessionDrawer()
+        setTimeout(pagerId, 0) { archiveListVisible = true }
+    }
+
+    /** Archived conversations open read-through: the same durable history, still archived. */
+    private fun openArchivedSession(sessionId: String) {
+        archiveListVisible = false
+        setTimeout(pagerId, 0) { selectSession(sessionId) }
+    }
+
+    // ------------------------------------------------------------------ plugins (Task 5)
+
+    private fun openPlugins() {
+        closeSessionDrawer()
+        setTimeout(pagerId, 0) {
+            pluginsVisible = true
+            loadPluginInventory()
+            probePluginAdmin()
+        }
+    }
+
+    /**
+     * The companion Host plugin advertises what it will let the phone control. Its
+     * absence is the normal case and simply leaves the inventory read-only — the app
+     * never probes by attempting a write and reading the error.
+     */
+    private fun probePluginAdmin() {
+        val repository = repository as? DshRemoteRepository ?: return
+        repository.probePluginAdmin { controllable ->
+            setTimeout(pagerId, 0) {
+                pluginControllableIds = controllable
+                KLog.i("dsh-plugins", "admin.probe controllable=${controllable.size}")
+            }
+        }
+    }
+
+    /** First tap asks the Host, which answers `confirm-required`; the modal repeats it confirmed. */
+    private fun requestPluginControl(entryId: String, action: String) {
+        val repository = repository as? DshRemoteRepository ?: return
+        pluginControlBusyId = entryId
+        repository.controlPlugin(entryId, action, confirm = false) { error ->
+            setTimeout(pagerId, 0) {
+                pluginControlBusyId = ""
+                if (error?.code == "confirm-required") {
+                    pluginConfirmEntryId = entryId
+                    pluginConfirmAction = action
+                    pluginConfirmMessage = error.message
+                } else {
+                    bridgeModule.toast(error?.message ?: "That plugin is already in that state.")
+                }
+            }
+        }
+    }
+
+    private fun commitPluginControl() {
+        val repository = repository as? DshRemoteRepository ?: return
+        val entryId = pluginConfirmEntryId
+        val action = pluginConfirmAction
+        pluginConfirmEntryId = ""
+        if (entryId.isEmpty()) return
+        pluginControlBusyId = entryId
+        repository.controlPlugin(entryId, action, confirm = true) { error ->
+            setTimeout(pagerId, 0) {
+                pluginControlBusyId = ""
+                if (error != null) {
+                    bridgeModule.toast(error.message)
+                    return@setTimeout
+                }
+                bridgeModule.toast(
+                    when (action) {
+                        "enable" -> "Plugin enabled"
+                        "disable" -> "Plugin disabled"
+                        else -> "Plugin reloaded"
+                    },
+                )
+                // The Host has settled the fiber by the time it answers, so a plain
+                // re-read shows the new phase rather than a transient one.
+                loadPluginInventory()
+            }
+        }
+    }
+
+    /**
+     * `pluginInventory/list` is a point-in-time read, so the sheet fetches on open and on
+     * refresh instead of following a stream. It carries no session state, which keeps it
+     * out of both list-building paths.
+     */
+    private fun loadPluginInventory() {
+        val repository = repository as? DshRemoteRepository
+        if (repository == null) {
+            pluginsLoading = false
+            pluginsError = "Only a remote DSH Host reports a plugin inventory."
+            return
+        }
+        pluginsLoading = true
+        pluginsError = ""
+        repository.loadPluginInventory(
+            onSuccess = { inventory ->
+                setTimeout(pagerId, 0) {
+                    pluginEntries = inventory.entries
+                    pluginPresetsByModule = DshPluginCatalog.presetsEnablingModule(inventory)
+                    pluginTotal = inventory.entries.size
+                    pluginFailedCount = inventory.entries.count {
+                        DshPluginCatalog.status(it) == DshPluginStatus.FAILED
+                    }
+                    pluginBrokenPresets.clear()
+                    pluginBrokenPresets.addAll(DshPluginCatalog.brokenPresets(inventory))
+                    pluginStatusChips.clear()
+                    pluginStatusChips.addAll(DshPluginCatalog.statusChips(inventory.entries))
+                    if (pluginStatusChips.none { it.status == pluginStatusFilter }) pluginStatusFilter = null
+                    pluginsLoading = false
+                    refreshPluginRows()
+                    KLog.i("dsh-plugins", "inventory.ok entries=${pluginEntries.size} failed=$pluginFailedCount")
+                }
+            },
+            onError = { error ->
+                setTimeout(pagerId, 0) {
+                    pluginsLoading = false
+                    pluginsError = dshPluginErrorMessage(error)
+                    KLog.i("dsh-plugins", "inventory.error code=${error.code}")
+                }
+            },
+        )
+    }
+
+    private fun refreshPluginRows() {
+        val next = DshPluginCatalog.visible(pluginEntries, pluginQuery, pluginStatusFilter)
+        if (pluginExpandedId.isNotEmpty() && next.none { it.entryId == pluginExpandedId }) pluginExpandedId = ""
+        pluginRows.clear()
+        pluginRows.addAll(next)
+    }
+
+    /**
+     * The sheet's search field is rebuilt empty on the next open, so the query and the
+     * status filter reset with it — otherwise a reopened sheet shows a filtered list
+     * under an empty search box.
+     */
+    private fun closePlugins() {
+        pluginsVisible = false
+        pluginExpandedId = ""
+        pluginConfirmEntryId = ""
+        pluginControlBusyId = ""
+        pluginQuery = ""
+        pluginStatusFilter = null
+        refreshPluginRows()
+    }
+
+    // ------------------------------------------------------------------ log centre (Task 6)
+
+    private fun openLogs() {
+        closeSessionDrawer()
+        setTimeout(pagerId, 0) {
+            logsVisible = true
+            refreshLogs()
+        }
+    }
+
+    /**
+     * Takes one snapshot of the ring buffer. The list is deliberately not live: a record
+     * per stream chunk would put UI work on the streaming path, which criterion 5 asks it
+     * not to. Refresh is a header action instead.
+     */
+    private fun refreshLogs() {
+        logNow = DateTime.currentTimestamp()
+        val snapshot = DshLogCenter.snapshot()
+        logTotal = snapshot.size
+        val matches = DshLogCenter.filtered(currentLogFilter(), logNow)
+        logMatched = matches.size
+        logRecords.clear()
+        logRecords.addAll(matches.take(DSH_LOG_RENDER_LIMIT))
+        logTypeChips.clear()
+        logTypeChips.addAll(DshLogCenter.typeChips(snapshot))
+    }
+
+    private fun currentLogFilter(): DshLogFilter = DshLogFilter(
+        minLevel = logMinLevel,
+        eventType = logEventType,
+        sessionId = if (logSessionScoped) activeSessionId else "",
+        windowMs = logWindowMs,
+        query = logQuery,
+    )
+
+    private fun logSessionFilterLabel(): String =
+        if (logSessionScoped) "This conversation: ${sessionTitle(activeSessionId)}" else "This conversation"
+
+    /** Local only: the Host's history and the conversation messages are untouched. */
+    private fun clearLogs() {
+        DshLogCenter.clear()
+        logDetail = null
+        refreshLogs()
+        bridgeModule.toast("Local logs cleared")
+    }
+
+    /**
+     * The issue-feedback bundle: environment facts plus the records currently matching the
+     * filter. Every record was redacted when it was written, so the share text is too.
+     */
+    private fun exportLogs() {
+        val now = DateTime.currentTimestamp()
+        val matches = DshLogCenter.filtered(currentLogFilter(), now)
+        if (matches.isEmpty()) {
+            bridgeModule.toast("No records to export")
+            return
+        }
+        bridgeModule.shareText(
+            "DSH diagnostic log",
+            DshLogFormat.export(matches, logEnvironment(), now),
+        )
+    }
+
+    private fun logEnvironment(): List<Pair<String, String>> = listOf(
+        "Connection mode" to when (connectionMode) {
+            DshConnectionMode.RELAY -> "QR relay"
+            DshConnectionMode.SSH -> "SSH"
+            DshConnectionMode.DIRECT -> "Direct (dev)"
+            DshConnectionMode.LOCAL -> "Local"
+        },
+        // The Host address is deliberately absent: the mode and the phase are what a
+        // triager needs, and a LAN address in a shared bundle is needless exposure.
+        "Connection state" to "$hostRuntimePhase",
+        "Platform" to "${pagerData.platform} ${pagerData.osVersion}".trim(),
+        "App version" to "${pagerData.appVersion} (build ${pagerData.nativeBuild})",
+        "Filter" to "level>=${logMinLevel.label} type=${logEventType.ifEmpty { "all" }} " +
+            "window=${if (logWindowMs == 0L) "all" else "${logWindowMs / 60_000}m"} " +
+            "session=${if (logSessionScoped) activeSessionId else "all"}",
+    )
+
+    private fun copyLogDetail() {
+        val record = logDetail ?: return
+        bridgeModule.copyToPasteboard(DshLogFormat.detail(record, DateTime.currentTimestamp()))
+        bridgeModule.toast("Log entry copied")
+    }
+
+    private fun closeLogs() {
+        logsVisible = false
+        logDetail = null
+        // The search field is rebuilt empty next time, so its filter goes with it.
+        logQuery = ""
+        refreshLogs()
     }
 
     private fun forkActiveSession() {
@@ -2262,42 +3147,6 @@ internal class DshHomePage : BasePager() {
         ensureConversationPanel(activeSessionId)
     }
 
-    private fun loadApiKeyAsync() {
-        if (isRemoteHost) return
-        val store = localStore
-        if (store == null) {
-            showCredentialSetupIfNeeded("")
-            return
-        }
-        localReadScope.launch {
-            val apiKey = runCatching { store.loadApiKey() }.getOrDefault("")
-            setTimeout(pagerId, 0) {
-                pendingApiKey = apiKey
-                if (apiKey.isEmpty()) {
-                    showCredentialSetupIfNeeded(apiKey)
-                } else if (engineReady && repository == null && connectionMode == DshConnectionMode.LOCAL) {
-                    connectLocalEngine(apiKey)
-                }
-            }
-        }
-    }
-
-    private fun showCredentialSetupIfNeeded(apiKey: String) {
-        if (isRemoteHost) return
-        if (pendingApiKey.isNotEmpty() || apiKey.isNotEmpty()) return
-        connectionLabel = "等待配置"
-        updateCredentialSetupVisibility(true)
-        if (messages.none { it.id == "api-key-required" }) {
-            messages.add(
-                DshMessage(
-                    id = "api-key-required",
-                    role = DshMessageRole.ASSISTANT,
-                    content = "输入 DeepSeek API Key 后即可开始使用本地 Agent。",
-                ),
-            )
-        }
-    }
-
     private fun selectSession(id: String) {
         val traceId = ++perfTraceSequence
         val startedAt = TimeSource.Monotonic.markNow()
@@ -2429,6 +3278,7 @@ internal class DshHomePage : BasePager() {
         DshConnectionMode.SSH -> "远程连接重建中"
         DshConnectionMode.RELAY -> "扫码连接重建中"
         DshConnectionMode.LOCAL -> "本地 DSH 连接重建中"
+        DshConnectionMode.DIRECT -> "远程连接重建中"
     }
 
     private fun isTurnStatusActive(): Boolean =
@@ -2468,7 +3318,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun syncBusyLabel(): String = when (connectionMode) {
-        DshConnectionMode.SSH -> "远程 DSH 正在同步，暂不能发送"
+        DshConnectionMode.SSH, DshConnectionMode.DIRECT -> "远程 DSH 正在同步，暂不能发送"
         DshConnectionMode.RELAY -> "扫码连接正在同步，暂不能发送"
         DshConnectionMode.LOCAL -> "本地 DSH 正在同步，暂不能发送"
     }
@@ -2692,7 +3542,13 @@ internal class DshHomePage : BasePager() {
     private fun sendDraft() {
         dismissKeyboard()
         val prompt = draft.trim()
-        if (prompt.isEmpty() || streaming) return
+        val outgoing = stagedAttachments.toList()
+        if (outgoing.any { it.state == DshAttachmentState.FAILED }) {
+            attachmentNotice = outgoing.first { it.state == DshAttachmentState.FAILED }.error
+                .ifEmpty { "Remove the rejected image before sending." }
+            return
+        }
+        if ((prompt.isEmpty() && outgoing.isEmpty()) || streaming) return
         val hostRepository = repository as? DshRemoteRepository
         if (hostRepository == null) {
             connectionLabel = "本地内核尚未连接"
@@ -2708,15 +3564,31 @@ internal class DshHomePage : BasePager() {
             return
         }
         if (sessions.isEmpty()) {
+            // loadRepository also creates a session when the Host has none, without
+            // claiming activeSessionId. Sending within that window used to create a
+            // second session and prompt into it, leaving the UI on the empty one.
+            if (sessionCreateInFlight) {
+                connectionLabel = "正在创建会话"
+                pendingSendAfterCreate = true
+                return
+            }
             connectionLabel = "正在创建会话"
+            sessionCreateInFlight = true
+            pendingSendAfterCreate = true
             hostRepository.createSession(null, { sessionId ->
+                sessionCreateInFlight = false
                 sessions.add(DshSession(sessionId, "新会话", "Host", "", blank = true))
                 refreshVisibleSessions()
                 runCatching { localStore?.replaceSessions(activeConnectionId, sessions.toList()) }
                 activeSessionId = sessionId
                 loadModels(sessionId)
-                sendDraft()
+                if (pendingSendAfterCreate) {
+                    pendingSendAfterCreate = false
+                    sendDraft()
+                }
             }, { error ->
+                sessionCreateInFlight = false
+                pendingSendAfterCreate = false
                 connectionLabel = "会话创建失败"
                 messages.add(DshMessage(
                     "send-session-error-${messages.size}",
@@ -2727,7 +3599,12 @@ internal class DshHomePage : BasePager() {
             return
         }
         val sessionId = activeSessionId
-        val user = DshMessage("user-${messages.size}", DshMessageRole.USER, prompt)
+        val user = DshMessage(
+            "user-${messages.size}",
+            DshMessageRole.USER,
+            prompt,
+            attachments = outgoing.map { it.toLocalRef() },
+        )
         val assistantId = "assistant-${messages.size}"
         val reasoningId = "$assistantId-reasoning"
         val wasEmpty = messages.isEmpty()
@@ -2748,16 +3625,28 @@ internal class DshHomePage : BasePager() {
         streamingAssistantContent = ""
         pendingAssistantDelta.setLength(0)
         assistantFlushScheduled = false
+        assistantBlocksProjected = false
         draft = ""
         inputView?.setText("")
         streaming = true
         stopButtonVisible = true
         connectionLabel = "正在生成"
+        attachmentMenuVisible = false
+        attachmentNotice = ""
+        markStagedAttachments(DshAttachmentState.UPLOADING, "")
         syncTurnStatusTicker()
         streamHandle = hostRepository.streamReply(
             pagerId = pagerId,
             sessionId = sessionId,
             prompt = prompt,
+            images = outgoing.map { it.image },
+            onAccepted = {
+                // `session/prompt` returned its receipt, so the Host has validated and
+                // stored the images; the bubble now carries them and the strip is done.
+                markStagedAttachments(DshAttachmentState.SENT, "")
+                stagedAttachments.clear()
+                failedAttachmentPrompt = ""
+            },
             onDelta = { delta, isReasoning ->
                 if (isReasoning) queueReasoningDelta(reasoningId, delta)
                 else queueAssistantDelta(assistantId, delta)
@@ -2765,7 +3654,10 @@ internal class DshHomePage : BasePager() {
             onComplete = { result ->
                 if (!connectionCoordinator.isActive(connectionMode)) return@streamReply
                 flushAssistantDelta()
-                if (streamingAssistantId.isEmpty() && result.isNotEmpty()) {
+                // Only stand a row up here for a reply that never streamed and was never
+                // projected from a committed assistant/message; otherwise the turn-wide
+                // accumulator is appended a second time as an extra bubble.
+                if (streamingAssistantId.isEmpty() && result.isNotEmpty() && !assistantBlocksProjected) {
                     ensureStreamingAssistantSegment()
                 }
                 // A turn may contain several assistant text blocks separated by
@@ -2790,12 +3682,27 @@ internal class DshHomePage : BasePager() {
                 flushAssistantDelta()
                 ensureStreamingAssistantSegment()
                 DshStreamLog.i("ui.error session=$sessionId message='${DshStreamLog.preview(error)}'")
-                settleStreamingMessage(DshMessageRole.ERROR, error)
+                // Nothing was stored Host-side, so the images go back to the strip with
+                // the reason and the prompt is kept for a one-tap retry.
+                if (stagedAttachments.isNotEmpty()) {
+                    markStagedAttachments(DshAttachmentState.FAILED, error)
+                    attachmentNotice = error
+                    failedAttachmentPrompt = prompt
+                    dropMessageAttachments(user.id)
+                }
+                settleFailedTurn(error)
                 persistMessages(sessionId)
                 connectionLabel = "已连接"
                 streamHandle = null
             },
         )
+    }
+
+    /** A prompt the Host refused never produced a `user/message`, so drop its refs. */
+    private fun dropMessageAttachments(messageId: String) {
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index < 0) return
+        messages[index] = messages[index].copy(attachments = emptyList())
     }
 
     private fun stopStream() {
@@ -2830,6 +3737,7 @@ internal class DshHomePage : BasePager() {
         pendingAssistantDelta.setLength(0)
         streamingAssistantContent = ""
         assistantFlushScheduled = false
+        assistantBlocksProjected = false
         streamingTurnAnchorAssistantId = ""
         streaming = false
         stopButtonVisible = false
@@ -2915,6 +3823,151 @@ internal class DshHomePage : BasePager() {
         attachmentMenuVisible = false
         voiceActive = !voiceActive
         connectionLabel = if (voiceActive) "正在聆听" else "已连接"
+    }
+
+    private fun toggleAttachmentMenu() {
+        dismissKeyboard()
+        voiceActive = false
+        attachmentMenuVisible = !attachmentMenuVisible
+    }
+
+    private val mediaModule: DshMediaModule
+        get() = acquireModule(DshMediaModule.MODULE_NAME)
+
+    /** `imageLimits` the Host published, so both the picker and prevalidation obey it. */
+    private fun hostImageLimits(): DshImageLimits? = (repository as? DshRemoteRepository)?.imageLimits()
+
+    private fun pickAttachmentImages() {
+        val limits = hostImageLimits()
+        val remaining = (limits?.maxImagesPerMessage ?: DEFAULT_MAX_IMAGES) - stagedAttachments.size
+        if (remaining <= 0) {
+            attachmentNotice = dshAttachmentReasonMessage(
+                DshAttachmentReason.TOO_MANY_IMAGES.name,
+                limits,
+            ).orEmpty()
+            return
+        }
+        requestMedia { callback ->
+            mediaModule.pickImages(
+                remaining,
+                limits?.maxImageDimension ?: 0,
+                limits?.maxImageBytes ?: 0L,
+                callback,
+            )
+        }
+    }
+
+    private fun captureAttachmentImage() {
+        val limits = hostImageLimits()
+        if (stagedAttachments.size >= (limits?.maxImagesPerMessage ?: DEFAULT_MAX_IMAGES)) {
+            attachmentNotice = dshAttachmentReasonMessage(
+                DshAttachmentReason.TOO_MANY_IMAGES.name,
+                limits,
+            ).orEmpty()
+            return
+        }
+        requestMedia { callback ->
+            mediaModule.captureImage(
+                limits?.maxImageDimension ?: 0,
+                limits?.maxImageBytes ?: 0L,
+                callback,
+            )
+        }
+    }
+
+    private fun requestMedia(open: ((DshMediaResult) -> Unit) -> Unit) {
+        if (attachmentPickBusy) return
+        attachmentPickBusy = true
+        attachmentMenuVisible = false
+        attachmentNotice = ""
+        open { result ->
+            attachmentPickBusy = false
+            if (result.error != DshMediaError.NONE) {
+                attachmentNotice = result.message.ifEmpty { "The image could not be read." }
+                return@open
+            }
+            result.images.forEach(::stageAttachment)
+        }
+    }
+
+    /**
+     * Adds one picked image to the composer. A violation of the Host's `imageLimits`
+     * lands in the strip as a failed tile with the Host's own reason, so the image is
+     * explained and removable before `session/prompt` is ever called.
+     */
+    private fun stageAttachment(image: DshOutgoingImage) {
+        val limits = hostImageLimits()
+        val accepted = stagedAttachments
+            .filter { it.state != DshAttachmentState.FAILED }
+            .map { it.image }
+        val rejection = DshAttachmentPrevalidation.validate(image, accepted, limits)
+        val id = "staged-${++stagedAttachmentSequence}"
+        stagedAttachments.add(
+            DshStagedAttachment(
+                localId = id,
+                image = image,
+                state = if (rejection == null) DshAttachmentState.PENDING else DshAttachmentState.FAILED,
+                error = rejection?.message.orEmpty(),
+            ),
+        )
+        cachedAttachmentDataUrls[id] = "data:${image.mediaType};base64,${image.base64}"
+        attachmentNotice = rejection?.message.orEmpty()
+        DshStreamLog.i(
+            "ui.attachment.staged id=$id type=${image.mediaType} bytes=${image.bytes} " +
+                "size=${image.width}x${image.height} reason=${rejection?.reason?.name ?: "ok"}",
+        )
+    }
+
+    private fun removeAttachment(localId: String) {
+        val index = stagedAttachments.indexOfFirst { it.localId == localId }
+        if (index < 0) return
+        stagedAttachments.removeAt(index)
+        cachedAttachmentDataUrls.remove(localId)
+        attachmentNotice = stagedAttachments.firstOrNull { it.state == DshAttachmentState.FAILED }?.error.orEmpty()
+    }
+
+    /**
+     * Re-checks a locally rejected image, or resends a turn whose `session/prompt`
+     * failed. Prevalidation runs again because the limits or the rest of the strip
+     * may have changed since the rejection.
+     */
+    private fun retryAttachment(localId: String) {
+        val index = stagedAttachments.indexOfFirst { it.localId == localId }
+        if (index < 0) return
+        val staged = stagedAttachments[index]
+        val others = stagedAttachments
+            .filterIndexed { position, other -> position != index && other.state != DshAttachmentState.FAILED }
+            .map { it.image }
+        val rejection = DshAttachmentPrevalidation.validate(staged.image, others, hostImageLimits())
+        stagedAttachments[index] = staged.copy(
+            state = if (rejection == null) DshAttachmentState.PENDING else DshAttachmentState.FAILED,
+            error = rejection?.message.orEmpty(),
+        )
+        attachmentNotice = rejection?.message.orEmpty()
+        if (rejection == null && failedAttachmentPrompt.isNotEmpty() &&
+            stagedAttachments.none { it.state == DshAttachmentState.FAILED }
+        ) {
+            draft = failedAttachmentPrompt
+            failedAttachmentPrompt = ""
+            sendDraft()
+        }
+    }
+
+    private fun previewStagedAttachment(localId: String) {
+        val staged = stagedAttachments.firstOrNull { it.localId == localId } ?: return
+        attachmentViewerRef = staged.toLocalRef()
+    }
+
+    private fun openAttachmentViewer(ref: DshImageAttachmentRef) {
+        if (ref.attachmentId.isNotEmpty()) loadAttachment(activeSessionId, ref.attachmentId)
+        attachmentViewerRef = ref
+    }
+
+    private fun markStagedAttachments(state: DshAttachmentState, error: String) {
+        stagedAttachments.toList().forEachIndexed { index, staged ->
+            if (staged.state == DshAttachmentState.FAILED && state != DshAttachmentState.FAILED) return@forEachIndexed
+            stagedAttachments[index] = staged.copy(state = state, error = error)
+        }
     }
 
     private fun queueAssistantDelta(id: String, delta: String) {
@@ -3017,10 +4070,15 @@ internal class DshHomePage : BasePager() {
         list.scrollToPosition(index, 0f, false)
     }
 
-    /** Close the current text row immediately before the next tool card. */
-    private fun splitStreamingAssistantBeforeTool() {
-        if (!streaming || streamingAssistantRootId.isEmpty()) return
+    /**
+     * Close the current text row immediately before the next tool card or committed
+     * message. Returns true when a row was sealed with streamed text, so the caller
+     * knows the block it is folding already has a row.
+     */
+    private fun splitStreamingAssistantBeforeTool(): Boolean {
+        if (!streaming || streamingAssistantRootId.isEmpty()) return false
         flushAssistantDelta()
+        var sealed = false
         val id = streamingAssistantId
         if (id.isNotEmpty()) {
             val index = messages.indexOfFirst { it.id == id }
@@ -3032,6 +4090,7 @@ internal class DshHomePage : BasePager() {
                 } else {
                     messages[index] = current.copy(content = text, streaming = false)
                     realizeVisibleMessages()
+                    sealed = true
                 }
             }
         }
@@ -3040,6 +4099,7 @@ internal class DshHomePage : BasePager() {
         streamingAssistantSegment += 1
         pendingAssistantDelta.setLength(0)
         assistantFlushScheduled = false
+        return sealed
     }
 
     private fun updateStreamingMessage(content: String, streaming: Boolean, isReasoning: Boolean = false) {
@@ -3152,6 +4212,21 @@ internal class DshHomePage : BasePager() {
 
     private fun messageRowKey(sessionId: String, messageId: String): String = "$sessionId:$messageId"
 
+    /**
+     * The Host commits the partial reply and logs the failure as a separate
+     * `turn/end` reason, so keep both rows here: the durable timeline that
+     * replaces this projection has the same shape.
+     */
+    private fun settleFailedTurn(error: String) {
+        if (streamingAssistantContent.isEmpty()) {
+            settleStreamingMessage(DshMessageRole.ERROR, error)
+            return
+        }
+        settleStreamingMessage(DshMessageRole.ASSISTANT, "")
+        messages.add(DshMessage("turn-error-${messages.size}", DshMessageRole.ERROR, error))
+        realizeTailMessageCell()
+    }
+
     private fun settleStreamingMessage(role: DshMessageRole, content: String) {
         val id = streamingAssistantId
         if (id.isNotEmpty()) {
@@ -3217,6 +4292,7 @@ internal class DshHomePage : BasePager() {
         streamingReasoningId = ""
         streamingReasoningContent = ""
         pendingAssistantDelta.setLength(0)
+        assistantBlocksProjected = false
         streaming = false
         stopButtonVisible = false
         streamingAssistantContent = ""
@@ -3272,15 +4348,28 @@ internal class DshHomePage : BasePager() {
                 messages.addAll(next.subList(messages.size, next.size))
             }
         }
+        realizeTailMessageCell()
+    }
+
+    /**
+     * Same `vforLazy` caveat as [ensureLiveMessageCell]: an add at `currentEnd`
+     * only grows the tail placeholder, and replacing an element is a remove plus
+     * an add, so the last row has to be built explicitly after it changes.
+     */
+    private fun realizeTailMessageCell() {
+        if (!followListTail || messages.isEmpty()) return
+        val list = messageScrollerRefs[activeSessionId]?.view ?: return
+        list.scrollToPosition(messages.lastIndex, 0f, false)
     }
 
     companion object {
-        private const val BG = 0xFFF7F9FA
-        private const val LOCAL_ENGINE_URL = "http://127.0.0.1:3080"
-        private const val ENGINE_CONNECT_RETRIES = 60
-        private const val ENGINE_RETRY_DELAY_MS = 1_000
+        private const val AUTH_REQUIRED_LABEL = "需要 DSH 登录 token"
+        internal const val DIRECT_BASE_URL_KEY = "direct_base_url"
+        internal const val DIRECT_AUTH_TOKEN_KEY = "direct_auth_token"
         private const val ANIMATION_DURATION_MS = 240
         private const val ANIMATION_DURATION_S = 0.24f
         private const val STREAM_FLUSH_INTERVAL_MS = 16
+        /** Cap used until the Host publishes its `imageLimits` projection. */
+        private const val DEFAULT_MAX_IMAGES = 4
     }
 }

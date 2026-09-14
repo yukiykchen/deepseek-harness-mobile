@@ -24,6 +24,7 @@
         android:theme="@style/Theme.AppCompat.NoActionBar">
         <activity
             android:name=".KuiklyRenderActivity"
+            android:configChanges="uiMode"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -42,5 +43,15 @@
             android:name=".relay.DshRelayForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- Hands the camera app a writable URI for a photo taken as a chat attachment. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

@@ -1,0 +1,9 @@
+{
+  "id": "error",
+  "match": ["fail", "error", "crash", "失败"],
+  "description": "A turn that streams a little text, then the model call fails; the turn ends with reason.kind = error.",
+  "steps": [
+    { "kind": "text", "text": "Starting to answer, but this request is going to hit a provider error in a moment…", "chunk": 12, "delayMs": 30 },
+    { "kind": "error", "partial": "Partial output before the failure", "message": "Provider returned 429 Too Many Requests (mock failure).", "code": "RATE_LIMITED" }
+  ]
+}

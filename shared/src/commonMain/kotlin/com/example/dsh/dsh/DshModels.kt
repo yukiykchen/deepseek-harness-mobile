@@ -4,6 +4,8 @@ internal enum class DshConnectionMode {
     LOCAL,
     RELAY,
     SSH,
+    /** Developer mode: a plain `http://host:port` reachable from the phone (mock Host, LAN DSH). */
+    DIRECT,
 }
 
 internal data class DshSessionScope(
@@ -15,6 +17,7 @@ internal data class DshSessionScope(
             DshConnectionMode.LOCAL -> LOCAL_STORAGE_KEY
             DshConnectionMode.RELAY -> "relay:${profileId ?: "default"}"
             DshConnectionMode.SSH -> "ssh:${profileId ?: DEFAULT_REMOTE_PROFILE_ID}"
+            DshConnectionMode.DIRECT -> "direct:${profileId ?: "default"}"
         }
 
     companion object {
@@ -38,6 +41,8 @@ internal data class DshRemoteProfile(
     val remoteDshPort: Int,
     val keyId: String,
     val hostFingerprint: String = "",
+    /** The `?token=` printed by `dsh web`; SSH has no plugin to discover it. */
+    val authToken: String = "",
 )
 
 internal enum class DshSessionCacheState {
@@ -53,6 +58,8 @@ internal enum class DshHostRuntimePhase {
     SYNCING,
     READY,
     RECONNECTING,
+    /** No browser-session cookie and no launch token to mint one; the user must supply the token. */
+    AUTH_REQUIRED,
     ERROR,
     STOPPED,
 }
@@ -100,12 +107,106 @@ internal fun dshFormatTurnDuration(elapsedMs: Long): String {
     return if (minutes > 0) "${minutes}分${seconds.toString().padStart(2, '0')}秒" else "${total}秒"
 }
 
+/** `imageLimits` projection issued by the Host; enforced before `session/prompt`. */
 internal data class DshImageLimits(
     val maxImageBytes: Long,
     val maxImagesPerMessage: Int,
     val maxMessageImageBytes: Long,
     val maxImagePixels: Long,
+    val maxImageDimension: Int,
     val mediaTypes: List<String>,
+)
+
+/** Durable `ImageAttachmentRef`: what the conversation log keeps instead of bytes. */
+internal data class DshImageAttachmentRef(
+    val attachmentId: String,
+    val mediaType: String,
+    val bytes: Long,
+    val width: Int,
+    val height: Int,
+    val name: String? = null,
+    /**
+     * Client-only key for an image the phone has sent but the Host has not yet
+     * committed, so the optimistic user bubble can paint the local preview. Empty
+     * on every reference that came from the Host.
+     */
+    val localId: String = "",
+) {
+    /** Key the preview cache is read with: the durable id once there is one. */
+    val previewKey: String get() = attachmentId.ifEmpty { localId }
+}
+
+/** One image about to be sent as an official `{type:"image"}` prompt part. */
+internal data class DshOutgoingImage(
+    val mediaType: String,
+    val base64: String,
+    val name: String? = null,
+    val bytes: Long = 0,
+    val width: Int = 0,
+    val height: Int = 0,
+)
+
+/** Lifecycle of one image staged in the composer. */
+internal enum class DshAttachmentState { PENDING, UPLOADING, SENT, FAILED }
+
+/**
+ * One image staged in the composer strip. [localId] survives a retry so the same
+ * thumbnail keeps its place, and it doubles as the key the sent user bubble reads
+ * its preview from until the Host's durable `attachmentId` replaces it.
+ */
+internal data class DshStagedAttachment(
+    val localId: String,
+    val image: DshOutgoingImage,
+    val state: DshAttachmentState = DshAttachmentState.PENDING,
+    val error: String = "",
+) {
+    val name: String get() = image.name?.takeIf { it.isNotEmpty() } ?: image.mediaType
+    val dataUrl: String get() = "data:${image.mediaType};base64,${image.base64}"
+
+    /**
+     * The staged image as the reference a user bubble renders before the Host has
+     * committed one. An empty `attachmentId` marks it as not yet durable.
+     */
+    fun toLocalRef(): DshImageAttachmentRef = DshImageAttachmentRef(
+        attachmentId = "",
+        mediaType = image.mediaType,
+        bytes = image.bytes,
+        width = image.width,
+        height = image.height,
+        name = image.name,
+        localId = localId,
+    )
+}
+
+internal data class DshPluginEntry(
+    val entryId: String,
+    val moduleName: String,
+    val enabled: Boolean,
+    /** `pending`, `loading`, `active`, `failed`, `unloading`, or null without a live fiber. */
+    val fiberPhase: String?,
+)
+
+internal data class DshAgentPresetPluginRow(
+    val entryId: String?,
+    val moduleName: String,
+    /** `true`, `false`, or `conditional`. */
+    val enabled: String,
+    val condition: String?,
+    val fiberPhase: String?,
+)
+
+internal data class DshAgentPresetPlugins(
+    val id: String,
+    val trust: String,
+    val name: String?,
+    val isDefault: Boolean,
+    val broken: String?,
+    val rows: List<DshAgentPresetPluginRow>,
+)
+
+internal data class DshPluginInventory(
+    val entries: List<DshPluginEntry>,
+    val agentPresets: List<DshAgentPresetPlugins>?,
 )
 
 internal data class DshRawSessionEvent(
@@ -136,6 +237,107 @@ internal class DshHostStore {
     fun replaceWorkspaceBaseline(raw: String, archived: Set<String>) {
         workspaceBaseline = raw
         archivedSessionIds = archived
+    }
+
+    fun replaceArchivedSessionIds(archived: Set<String>) {
+        archivedSessionIds = archived
+    }
+
+    /** `workspace/follow` upsert: replace the row in place or append it. */
+    fun upsertWorkspace(workspace: com.tencent.kuikly.core.nvi.serialization.json.JSONObject) {
+        val id = workspace.optString("workspaceId")
+        if (id.isEmpty()) return
+        val current = runCatching { com.tencent.kuikly.core.nvi.serialization.json.JSONArray(workspaceBaseline) }.getOrNull()
+            ?: com.tencent.kuikly.core.nvi.serialization.json.JSONArray()
+        val result = com.tencent.kuikly.core.nvi.serialization.json.JSONArray()
+        var replaced = false
+        for (index in 0 until current.length()) {
+            val existing = current.optJSONObject(index) ?: continue
+            if (existing.optString("workspaceId") == id) {
+                result.put(workspace)
+                replaced = true
+            } else {
+                result.put(existing)
+            }
+        }
+        if (!replaced) result.put(workspace)
+        workspaceBaseline = result.toString()
+    }
+
+    fun removeWorkspace(workspaceId: String) {
+        if (workspaceId.isEmpty()) return
+        val current = runCatching { com.tencent.kuikly.core.nvi.serialization.json.JSONArray(workspaceBaseline) }.getOrNull() ?: return
+        val result = com.tencent.kuikly.core.nvi.serialization.json.JSONArray()
+        for (index in 0 until current.length()) {
+            val existing = current.optJSONObject(index) ?: continue
+            if (existing.optString("workspaceId") != workspaceId) result.put(existing)
+        }
+        workspaceBaseline = result.toString()
+    }
+
+    fun removeSession(sessionId: String) {
+        sessions.remove(sessionId)
+        sessionEvents.remove(sessionId)
+        sessionLastSeq.remove(sessionId)
+        queueSnapshots.remove(sessionId)
+        jobSnapshots.remove(sessionId)
+        projections.remove(sessionId)
+    }
+
+    fun workspaceSessionIds(workspaceId: String): List<String> {
+        val workspaces = runCatching { com.tencent.kuikly.core.nvi.serialization.json.JSONArray(workspaceBaseline) }.getOrNull()
+            ?: return emptyList()
+        for (index in 0 until workspaces.length()) {
+            val workspace = workspaces.optJSONObject(index) ?: continue
+            if (workspace.optString("workspaceId") != workspaceId) continue
+            val ids = workspace.optJSONArray("sessionIds") ?: return emptyList()
+            return (0 until ids.length()).mapNotNull { ids.optString(it)?.takeIf { id -> id.isNotEmpty() } }
+        }
+        return emptyList()
+    }
+
+    fun workspaceIdForSession(sessionId: String): String? {
+        val workspaces = runCatching { com.tencent.kuikly.core.nvi.serialization.json.JSONArray(workspaceBaseline) }.getOrNull()
+            ?: return null
+        for (index in 0 until workspaces.length()) {
+            val workspace = workspaces.optJSONObject(index) ?: continue
+            val ids = workspace.optJSONArray("sessionIds") ?: continue
+            for (sessionIndex in 0 until ids.length()) {
+                if (ids.optString(sessionIndex) == sessionId) {
+                    return workspace.optString("workspaceId").takeIf { it.isNotEmpty() }
+                }
+            }
+        }
+        return null
+    }
+
+    /** Join workspaces with known sessions; blank sessions never show, archived only when asked. */
+    fun workspaceGroups(includeArchived: Boolean): List<DshWorkspaceGroup> {
+        val workspaces = runCatching { com.tencent.kuikly.core.nvi.serialization.json.JSONArray(workspaceBaseline) }.getOrNull()
+            ?: com.tencent.kuikly.core.nvi.serialization.json.JSONArray()
+        val sessionById = sessions.values
+            .filterNot { it.blank || (!includeArchived && archivedSessionIds.contains(it.id)) }
+            .associateBy { it.id }
+        val grouped = mutableSetOf<String>()
+        val groups = (0 until workspaces.length()).mapNotNull { index ->
+            val workspace = workspaces.optJSONObject(index) ?: return@mapNotNull null
+            val workspaceId = workspace.optString("workspaceId")
+            if (workspaceId.isEmpty()) return@mapNotNull null
+            val sessionIds = workspace.optJSONArray("sessionIds") ?: com.tencent.kuikly.core.nvi.serialization.json.JSONArray()
+            val members = (0 until sessionIds.length()).mapNotNull { sessionIndex ->
+                val sessionId = sessionIds.optString(sessionIndex)
+                sessionId?.takeIf { it.isNotEmpty() }?.let(grouped::add)
+                sessionById[sessionId]
+            }
+            DshWorkspaceGroup(
+                workspaceId = workspaceId,
+                title = workspace.optString("title").ifEmpty { workspaceId },
+                path = workspace.optString("path"),
+                sessions = members,
+            )
+        }
+        val ungrouped = sessionById.values.filterNot { grouped.contains(it.id) }
+        return if (ungrouped.isEmpty()) groups else groups + DshWorkspaceGroup("", "未归类", "", ungrouped)
     }
 
     fun reorderWorkspaces(orderJson: String) {
@@ -291,6 +493,8 @@ internal data class DshMessage(
     val toolCallId: String = "",
     /** Remote-only structured tool state; LOCAL keeps this null. */
     val remoteTool: DshRemoteToolCallModel? = null,
+    /** Images the user sent with this message, as durable references. */
+    val attachments: List<DshImageAttachmentRef> = emptyList(),
 )
 
 internal fun dshIsLiveAssistantText(message: DshMessage): Boolean =
@@ -357,7 +561,8 @@ internal fun DshMessage.visuallyEquals(other: DshMessage): Boolean =
         isReasoning == other.isReasoning &&
         attachmentId == other.attachmentId &&
         toolCallId == other.toolCallId &&
-        remoteTool == other.remoteTool
+        remoteTool == other.remoteTool &&
+        attachments == other.attachments
 
 internal fun dshMessagesVisuallyEqual(left: List<DshMessage>, right: List<DshMessage>): Boolean {
     if (left.size != right.size) return false
@@ -404,6 +609,7 @@ internal data class DshWebTimelineItem(
     val attachmentId: String? = null,
     val source: com.tencent.kuikly.core.nvi.serialization.json.JSONObject? = null,
     val remoteTool: DshRemoteToolCallModel? = null,
+    val attachments: List<DshImageAttachmentRef> = emptyList(),
 ) {
     enum class Kind {
         USER,
@@ -592,11 +798,6 @@ internal interface DshRepository {
         onError: (String) -> Unit,
     )
 
-    fun loadHistory(
-        sessionId: String,
-        onSuccess: (List<DshMessage>) -> Unit,
-        onError: (String) -> Unit,
-    )
     fun streamReply(
         pagerId: String,
         sessionId: String,

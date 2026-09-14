@@ -14,6 +14,10 @@ internal interface DshLocalStore {
     fun migrateLegacyRemoteProfile(profile: DshLegacyRemoteProfile): Boolean
     fun clearLegacyRemotePreferenceKeys() = Unit
 
+    /** Free-form key/value settings (theme, auth cookies per scope, ...). */
+    fun loadSetting(key: String): String
+    fun saveSetting(key: String, value: String)
+
     fun loadSessions(scopeId: String): List<DshSession>
     fun replaceSessions(scopeId: String, sessions: List<DshSession>)
     fun loadMessages(scopeId: String, sessionId: String): List<DshMessage>

@@ -5,13 +5,15 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 
 /**
- * Remote-only Host repository. Local mode intentionally keeps the legacy
- * repository and its transport behavior unchanged.
+ * Page-facing facade over [DshRemoteHostRepository]. Scan / SSH / direct
+ * connections all speak the same 0.1.5 Host protocol; only how the phone
+ * reaches `baseUrl` and how it obtains the launch token differ.
  */
 internal class DshRemoteRepository(
     network: NetworkModule,
     webSocket: DshWebSocketModule,
     connection: DshHostConnection,
+    auth: DshHostAuthenticator,
     pagerId: String,
     onState: (DshHostRuntimeState) -> Unit = {},
     onQueueSnapshot: (String) -> Unit = {},
@@ -21,11 +23,14 @@ internal class DshRemoteRepository(
     onSessionEvent: (String, DshRawSessionEvent) -> Unit = { _, _ -> },
     onRemoteEvent: (String) -> Unit = {},
     onPendingInteraction: (String) -> Unit = {},
+    onSessionsChanged: () -> Unit = {},
+    onSessionError: (String, String) -> Unit = { _, _ -> },
 ) : DshRepository {
     private val delegate = DshRemoteHostRepository(
         network,
         webSocket,
         connection,
+        auth,
         pagerId,
         onState,
         onQueueSnapshot = onQueueSnapshot,
@@ -35,11 +40,17 @@ internal class DshRemoteRepository(
         onSessionEvent = onSessionEvent,
         onRemoteEvent = onRemoteEvent,
         onPendingInteraction = onPendingInteraction,
+        onSessionsChanged = onSessionsChanged,
+        onSessionError = onSessionError,
     )
     internal val store get() = delegate.store
 
+    fun currentConnectionState(): DshHostRuntimeState = delegate.currentConnectionState()
     fun isProductReady(): Boolean = delegate.isProductReady()
+    fun retryAuthentication() = delegate.retryAuthentication()
     fun stop() = delegate.stop()
+    fun imageLimits(): DshImageLimits? = delegate.imageLimits()
+
     fun respondApproval(
         rpcId: String,
         sessionId: String,
@@ -63,6 +74,8 @@ internal class DshRemoteRepository(
         onError: (String) -> Unit = {},
     ) = delegate.loadWebTimeline(sessionId, onSuccess, onError)
 
+    fun trimFollows(keep: Set<String>) = delegate.trimFollows(keep)
+
     fun adoptLiveStream(
         sessionId: String,
         onDelta: (String, Boolean) -> Unit,
@@ -72,8 +85,18 @@ internal class DshRemoteRepository(
 
     fun detachLiveStreams(sessionId: String) = delegate.detachLiveStreams(sessionId)
 
+    fun cancelSession(sessionId: String) = delegate.cancelSession(sessionId)
+
     fun loadSkills(sessionId: String, onSuccess: (List<DshSkill>) -> Unit, onError: (String) -> Unit = {}) =
         delegate.loadSkills(sessionId, onSuccess, onError)
+
+    fun loadPluginInventory(onSuccess: (DshPluginInventory) -> Unit, onError: (DshRpcError) -> Unit) =
+        delegate.loadPluginInventory(onSuccess, onError)
+
+    fun probePluginAdmin(onResult: (Set<String>) -> Unit) = delegate.probePluginAdmin(onResult)
+
+    fun controlPlugin(entryId: String, action: String, confirm: Boolean, callback: (DshRpcError?) -> Unit) =
+        delegate.controlPlugin(entryId, action, confirm, callback)
 
     fun goalEdit(sessionId: String, goal: DshGoalSnapshot, objective: String, callback: (DshRpcError?) -> Unit) =
         delegate.goalEdit(sessionId, goal, objective, callback)
@@ -104,6 +127,8 @@ internal class DshRemoteRepository(
 
     fun workspaceGroups(): List<DshWorkspaceGroup> = delegate.workspaceGroups()
 
+    fun archivedSessions(): List<DshSession> = delegate.archivedSessions()
+
     fun workspaceIdForSession(sessionId: String): String? = delegate.workspaceIdForSession(sessionId)
 
     fun blankSessionInWorkspace(workspaceId: String?): DshSession? = delegate.blankSessionInWorkspace(workspaceId)
@@ -114,7 +139,7 @@ internal class DshRemoteRepository(
     fun updateQueue(
         sessionId: String,
         itemId: String,
-        action: com.tencent.kuikly.core.nvi.serialization.json.JSONObject,
+        action: JSONObject,
         callback: (JSONObject?, DshRpcError?) -> Unit,
     ) = delegate.updateQueue(sessionId, itemId, action, callback)
 
@@ -188,18 +213,6 @@ internal class DshRemoteRepository(
     override fun createSession(workspaceId: String?, onSuccess: (String) -> Unit, onError: (String) -> Unit) =
         delegate.createSession(workspaceId, onSuccess, onError)
 
-    override fun loadHistory(sessionId: String, onSuccess: (List<DshMessage>) -> Unit, onError: (String) -> Unit) =
-        delegate.loadHistory(sessionId, onSuccess, onError)
-
-    fun streamReply(
-        pagerId: String,
-        sessionId: String,
-        prompt: String,
-        onDelta: (String) -> Unit,
-        onComplete: (String) -> Unit,
-        onError: (String) -> Unit,
-    ): DshStreamHandle = delegate.streamReply(pagerId, sessionId, prompt, onDelta, onComplete, onError)
-
     override fun streamReply(
         pagerId: String,
         sessionId: String,
@@ -208,4 +221,59 @@ internal class DshRemoteRepository(
         onComplete: (String) -> Unit,
         onError: (String) -> Unit,
     ): DshStreamHandle = delegate.streamReply(pagerId, sessionId, prompt, onDelta, onComplete, onError)
+
+    fun streamReply(
+        pagerId: String,
+        sessionId: String,
+        prompt: String,
+        images: List<DshOutgoingImage>,
+        onDelta: (String, Boolean) -> Unit,
+        onComplete: (String) -> Unit,
+        onError: (String) -> Unit,
+        onAccepted: () -> Unit = {},
+    ): DshStreamHandle =
+        delegate.streamReply(pagerId, sessionId, prompt, images, onDelta, onComplete, onError, onAccepted)
+}
+
+/**
+ * Authenticator backed by the page's local store: the cookie is persisted per
+ * connection scope, the launch token comes from the SSH profile or, for scan
+ * connections, from the relay plugin's `/dsh-scan-remote/api/auth` route.
+ */
+internal class DshStoredHostAuthenticator(
+    private val scopeKey: String,
+    private val store: DshLocalStore?,
+    initialToken: String,
+    override val relayTokenAvailable: Boolean,
+    private val mintCookie: (baseUrl: String, launchToken: String, bearer: String, callback: (String?, String?) -> Unit) -> Unit,
+    private val onTokenDiscovered: (String) -> Unit = {},
+) : DshHostAuthenticator {
+    private var token = initialToken
+    private var cookie = runCatching { store?.loadSetting(cookieKey(scopeKey)) }.getOrNull().orEmpty()
+
+    override fun cookie(): String = cookie
+
+    override fun launchToken(): String = token
+
+    fun updateLaunchToken(value: String) {
+        token = value
+    }
+
+    override fun onLaunchToken(token: String) {
+        this.token = token
+        onTokenDiscovered(token)
+    }
+
+    override fun onCookie(cookie: String) {
+        this.cookie = cookie
+        runCatching { store?.saveSetting(cookieKey(scopeKey), cookie) }
+    }
+
+    override fun mint(baseUrl: String, launchToken: String, bearer: String, callback: (String?, String?) -> Unit) {
+        mintCookie(baseUrl, launchToken, bearer, callback)
+    }
+
+    companion object {
+        fun cookieKey(scopeKey: String): String = "auth_cookie:$scopeKey"
+    }
 }

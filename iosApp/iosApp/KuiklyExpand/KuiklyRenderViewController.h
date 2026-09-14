@@ -10,6 +10,12 @@ NS_ASSUME_NONNULL_BEGIN
  * @return 返回KuiklyRenderViewController实例
  */
 - (instancetype)initWithPageName:(NSString *)pageName pageData:(NSDictionary *)pageData;
+
+/*
+ * @brief 由 shared 层在应用主题变化时调用，同步状态栏样式与窗口底色。
+ * @param dark 解析后的应用调色板是否为暗色
+ */
+- (void)applyThemeChrome:(BOOL)dark;
 @end
 
 NS_ASSUME_NONNULL_END

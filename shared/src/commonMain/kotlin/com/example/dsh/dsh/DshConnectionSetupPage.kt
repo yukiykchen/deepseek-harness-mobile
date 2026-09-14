@@ -34,6 +34,10 @@ internal class DshConnectionSetupPage : BasePager() {
     private var sshFingerprint by observable("")
     private var keyId by observable("")
     private var keyLabel by observable("未导入 SSH 私钥")
+    /** `dsh web` launch token for SSH (no plugin can discover it there). */
+    private var authToken by observable("")
+    private var directBaseUrl by observable("")
+    private var directAuthToken by observable("")
     private var busy by observable(false)
     private var error by observable("")
     private var fingerprintPending by observable("")
@@ -90,7 +94,10 @@ internal class DshConnectionSetupPage : BasePager() {
         dshPort = profile?.remoteDshPort?.toString() ?: "3080"
         keyId = profile?.keyId.orEmpty()
         sshFingerprint = profile?.hostFingerprint.orEmpty()
+        authToken = profile?.authToken.orEmpty()
         keyLabel = if (keyId.isEmpty()) "未导入 SSH 私钥" else "已导入 SSH 私钥"
+        directBaseUrl = runCatching { store?.loadSetting(DshHomePage.DIRECT_BASE_URL_KEY) }.getOrNull().orEmpty()
+        directAuthToken = runCatching { store?.loadSetting(DshHomePage.DIRECT_AUTH_TOKEN_KEY) }.getOrNull().orEmpty()
     }
 
     override fun body(): ViewBuilder {
@@ -101,7 +108,7 @@ internal class DshConnectionSetupPage : BasePager() {
                     flex(1f)
                     flexDirectionColumn()
                     paddingTop(pagerData.statusBarHeight)
-                    backgroundColor(Color(0xFFF7F9FA))
+                    backgroundColor(theme.background)
                 }
                 View {
                     attr {
@@ -110,8 +117,8 @@ internal class DshConnectionSetupPage : BasePager() {
                         alignItemsCenter()
                         paddingLeft(20f)
                         paddingRight(20f)
-                        backgroundColor(Color.WHITE)
-                        borderBottom(Border(1f, BorderStyle.SOLID, Color(0xFFE5E8EB)))
+                        backgroundColor(theme.surface)
+                        borderBottom(Border(1f, BorderStyle.SOLID, theme.divider))
                     }
                     DshWordmark(height = 24f)
                 }
@@ -123,30 +130,36 @@ internal class DshConnectionSetupPage : BasePager() {
                         paddingTop(40f)
                         flexDirectionColumn()
                     }
-                    Text { attr { text("连接 DSH"); fontSize(28f); fontWeightBold(); color(Color(0xFF1F2933)) } }
-                    Text { attr { text("选择电脑上的 Agent"); marginTop(10f); fontSize(15f); color(Color(0xFF68737D)) } }
+                    Text { attr { text("连接 DSH"); fontSize(28f); fontWeightBold(); color(theme.textPrimary) } }
+                    Text { attr { text("选择电脑上的 Agent"); marginTop(10f); fontSize(15f); color(theme.textSecondary) } }
                     View {
-                        attr { height(48f); marginTop(24f); flexDirectionRow(); padding(4f); borderRadius(10f); backgroundColor(Color(0xFFE9EDF1)) }
+                        attr { height(48f); marginTop(24f); flexDirectionRow(); padding(4f); borderRadius(10f); backgroundColor(theme.surfaceSunken) }
                         DshSetupModeButton("扫码连接", { ctx.connectionMode == DshConnectionMode.RELAY }, { ctx.connectionMode = DshConnectionMode.RELAY; ctx.error = "" })
                         DshSetupModeButton("SSH", { ctx.connectionMode == DshConnectionMode.SSH }, { ctx.connectionMode = DshConnectionMode.SSH; ctx.error = "" })
+                        DshSetupModeButton("直连", { ctx.connectionMode == DshConnectionMode.DIRECT }, { ctx.connectionMode = DshConnectionMode.DIRECT; ctx.error = "" })
+                    }
+                    vif({ ctx.connectionMode == DshConnectionMode.DIRECT }) {
+                        Text { attr { text("开发用：直接访问手机能打开的 DSH 地址，例如局域网 IP 或 tools/mock-host。"); marginTop(16f); fontSize(14f); lineHeight(21f); color(theme.textSecondary) } }
+                        DshSetupInput("DSH 地址", { ctx.directBaseUrl }, "http://192.168.1.10:3080") { ctx.directBaseUrl = it; ctx.error = "" }
+                        DshSetupInput("dsh web 登录 token（mock host 可留空）", { ctx.directAuthToken }, "粘贴 token 或完整 URL") { ctx.directAuthToken = it; ctx.error = "" }
                     }
                     vif({ ctx.connectionMode == DshConnectionMode.RELAY }) {
                         vif({ !ctx.relayPaired }) {
-                            Text { attr { text("扫描电脑 Settings > Remote Access 中的二维码。首版只保存一台电脑。"); marginTop(16f); fontSize(14f); lineHeight(21f); color(Color(0xFF68737D)) } }
+                            Text { attr { text("扫描电脑 Settings > Remote Access 中的二维码。首版只保存一台电脑。"); marginTop(16f); fontSize(14f); lineHeight(21f); color(theme.textSecondary) } }
                         }
                         vif({ ctx.relayPaired }) {
-                            Text { attr { text(ctx.relayHostName.ifEmpty { "已配对电脑" }); marginTop(16f); fontSize(16f); fontWeightBold(); color(Color(0xFF1F2933)) } }
-                            Text { attr { text(ctx.relayOrigin); marginTop(6f); fontSize(13f); color(Color(0xFF68737D)) } }
-                            Text { attr { text(ctx.relayMessage.ifEmpty { "已保存配对，连接后进入聊天" }); marginTop(8f); fontSize(13f); color(Color(0xFF4F565C)) } }
+                            Text { attr { text(ctx.relayHostName.ifEmpty { "已配对电脑" }); marginTop(16f); fontSize(16f); fontWeightBold(); color(theme.textPrimary) } }
+                            Text { attr { text(ctx.relayOrigin); marginTop(6f); fontSize(13f); color(theme.textSecondary) } }
+                            Text { attr { text(ctx.relayMessage.ifEmpty { "已保存配对，连接后进入聊天" }); marginTop(8f); fontSize(13f); color(theme.textSecondary) } }
                         }
                         View {
-                            attr { height(46f); marginTop(16f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); borderRadius(8f); backgroundColor(Color(0xFF4176E6)) }
-                            Text { attr { text(if (ctx.busy) "处理中..." else if (ctx.relayPaired) "重新扫码" else "扫描电脑二维码"); fontSize(15f); color(Color.WHITE) } }
+                            attr { height(46f); marginTop(16f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); borderRadius(8f); backgroundColor(theme.accentFill) }
+                            Text { attr { text(if (ctx.busy) "处理中..." else if (ctx.relayPaired) "重新扫码" else "扫描电脑二维码"); fontSize(15f); color(theme.textOnAccent) } }
                             event { click { if (!ctx.busy) ctx.scanRelayQr() } }
                         }
                         vif({ ctx.relayPaired }) {
                             Text {
-                                attr { text("移除这台电脑"); marginTop(12f); fontSize(14f); color(Color(0xFFBF3535)) }
+                                attr { text("移除这台电脑"); marginTop(12f); fontSize(14f); color(theme.danger) }
                                 event { click { if (!ctx.busy) ctx.forgetRelay() } }
                             }
                         }
@@ -160,17 +173,19 @@ internal class DshConnectionSetupPage : BasePager() {
                             DshSetupInput("远程 DSH 端口", { ctx.dshPort }, "3080", 0.5f, 12f) { ctx.dshPort = it; ctx.error = "" }
                         }
                         View {
-                            attr { height(46f); marginTop(12f); flexDirectionRow(); alignItemsCenter(); paddingLeft(12f); paddingRight(12f); borderRadius(8f); backgroundColor(Color.WHITE); border(Border(1f, BorderStyle.SOLID, Color(0xFFD9DEE3))) }
-                            Text { attr { text(ctx.keyLabel); flex(1f); fontSize(14f); color(Color(0xFF4F565C)) } }
-                            Text { attr { text(if (ctx.busy) "导入中..." else "导入私钥"); fontSize(14f); color(Color(0xFF4176E6)) }; event { click { if (!ctx.busy) ctx.pickKey() } } }
+                            attr { height(46f); marginTop(12f); flexDirectionRow(); alignItemsCenter(); paddingLeft(12f); paddingRight(12f); borderRadius(8f); backgroundColor(theme.inputBackground); border(Border(1f, BorderStyle.SOLID, theme.inputBorder)) }
+                            Text { attr { text(ctx.keyLabel); flex(1f); fontSize(14f); color(theme.textSecondary) } }
+                            Text { attr { text(if (ctx.busy) "导入中..." else "导入私钥"); fontSize(14f); color(theme.accent) }; event { click { if (!ctx.busy) ctx.pickKey() } } }
                         }
+                        DshSetupInput("dsh web 登录 token", { ctx.authToken }, "粘贴 dsh web 打印的 token 或完整 URL") { ctx.authToken = it; ctx.error = "" }
+                        Text { attr { text("DSH 0.1.2+ 要求浏览器登录；token 在电脑端 dsh web 启动时打印，每次重启都会变化。"); marginTop(6f); fontSize(12f); lineHeight(18f); color(theme.textMuted) } }
                     }
                     vif({ ctx.error.isNotEmpty() }) {
-                        Text { attr { text(ctx.error); marginTop(12f); fontSize(13f); lineHeight(19f); color(Color(0xFFBF3535)) } }
+                        Text { attr { text(ctx.error); marginTop(12f); fontSize(13f); lineHeight(19f); color(theme.danger) } }
                     }
                     vif({ ctx.fingerprintPending.isNotEmpty() }) {
                         Text {
-                            attr { text("确认并继续使用此 SSH 主机指纹"); marginTop(10f); fontSize(13f); color(Color(0xFF4176E6)) }
+                            attr { text("确认并继续使用此 SSH 主机指纹"); marginTop(10f); fontSize(13f); color(theme.accent) }
                             event { click { if (!ctx.busy) ctx.trustFingerprint() } }
                         }
                     }
@@ -180,12 +195,13 @@ internal class DshConnectionSetupPage : BasePager() {
                             height(48f)
                             marginBottom(24f)
                             borderRadius(10f)
-                            backgroundColor(Color(if (ctx.busy) 0xFFB7C8FE else 0xFF4176E6))
+                            backgroundColor(if (ctx.busy) theme.accentFillDisabled else theme.accentFill)
                             titleAttr { text(when (ctx.connectionMode) {
                                 DshConnectionMode.SSH -> "保存并连接电脑"
                                 DshConnectionMode.RELAY -> if (ctx.relayPaired) "连接已配对电脑" else "请先扫码"
+                                DshConnectionMode.DIRECT -> "直连 DSH"
                                 DshConnectionMode.LOCAL -> "请改用 DSH Local"
-                            }); fontSize(15f); color(Color.WHITE) }
+                            }); fontSize(15f); color(theme.textOnAccent) }
                         }
                         event { click { if (!ctx.busy) ctx.continueToHost() } }
                     }
@@ -275,6 +291,20 @@ internal class DshConnectionSetupPage : BasePager() {
             openHome()
             return
         }
+        if (connectionMode == DshConnectionMode.DIRECT) {
+            val base = directBaseUrl.trim().trimEnd('/')
+            if (!base.startsWith("http://") && !base.startsWith("https://")) {
+                error = "请输入以 http:// 或 https:// 开头的 DSH 地址"
+                return
+            }
+            runCatching {
+                localStore?.saveSetting(DshHomePage.DIRECT_BASE_URL_KEY, base)
+                localStore?.saveSetting(DshHomePage.DIRECT_AUTH_TOKEN_KEY, dshExtractLaunchToken(directAuthToken))
+                localStore?.saveLastConnectionMode(DshConnectionMode.DIRECT)
+            }
+            openHome()
+            return
+        }
         val ssh = sshPort.toIntOrNull()
         val dsh = dshPort.toIntOrNull()
         if (!pageData.supportsSshBridge) {
@@ -299,6 +329,7 @@ internal class DshConnectionSetupPage : BasePager() {
                         val profile = DshRemoteProfile(
                             host = host.trim(), sshPort = ssh, username = user.trim(),
                             remoteDshPort = dsh, keyId = keyId, hostFingerprint = sshFingerprint,
+                            authToken = dshExtractLaunchToken(authToken),
                         )
                         runCatching { localStore?.saveRemoteProfile(profile) }
                         runCatching { localStore?.saveLastConnectionMode(DshConnectionMode.SSH) }
@@ -329,28 +360,51 @@ internal class DshConnectionSetupPage : BasePager() {
                     sshFingerprint = state.message
                 }
                 DshSshPhase.READY -> {
-                        val repository = DshRemoteRepository(
+                    val scope = DshSessionScope(DshConnectionMode.SSH, DshSessionScope.DEFAULT_REMOTE_PROFILE_ID)
+                    val auth = DshStoredHostAuthenticator(
+                        scopeKey = scope.storageKey,
+                        store = localStore,
+                        initialToken = profile.authToken,
+                        relayTokenAvailable = false,
+                        mintCookie = { base, launchToken, bearer, callback ->
+                            bridgeModule.mintAuthCookie(base, launchToken, bearer) { cookie, mintError ->
+                                setTimeout(pagerId, 0) { callback(cookie, mintError) }
+                            }
+                        },
+                    )
+                    val repository = DshRemoteRepository(
                         network = acquireModule(com.tencent.kuikly.core.module.NetworkModule.MODULE_NAME),
                         webSocket = acquireModule(DshWebSocketModule.MODULE_NAME),
                         connection = DshHostConnection("http://127.0.0.1:${state.localPort}"),
+                        auth = auth,
                         pagerId = pagerId,
+                        onState = { runtimeState ->
+                            if (runtimeState.phase == DshHostRuntimePhase.AUTH_REQUIRED) {
+                                setTimeout(pagerId, 0) {
+                                    busy = false
+                                    error = runtimeState.message.ifEmpty { "请粘贴 dsh web 打印的登录 token" }
+                                    (probeRepository as? DshRemoteRepository)?.stop()
+                                    module.stopSsh()
+                                }
+                            }
+                        },
                     )
                     probeRepository = repository
-                        repository.loadSessions({
-                            setTimeout(pagerId, 0) {
-                                busy = false
-                                error = ""
-                                (probeRepository as? DshRemoteRepository)?.stop()
-                                module.stopSsh()
-                                openHome()
-                            }
-                        }, { message ->
-                            setTimeout(pagerId, 0) {
-                                busy = false
-                                error = "远程 DSH 不可用：$message"
-                                (probeRepository as? DshRemoteRepository)?.stop()
-                                module.stopSsh()
-                            }
+                    repository.loadSessions({
+                        setTimeout(pagerId, 0) {
+                            busy = false
+                            error = ""
+                            (probeRepository as? DshRemoteRepository)?.stop()
+                            module.stopSsh()
+                            openHome()
+                        }
+                    }, { message ->
+                        setTimeout(pagerId, 0) {
+                            busy = false
+                            error = "远程 DSH 不可用：$message"
+                            (probeRepository as? DshRemoteRepository)?.stop()
+                            module.stopSsh()
+                        }
                     })
                 }
                 DshSshPhase.ERROR -> {
@@ -368,24 +422,19 @@ internal class DshConnectionSetupPage : BasePager() {
         if (fingerprint.isBlank()) return
         sshFingerprint = fingerprint
         engineModule?.trustSshFingerprint(fingerprint)
-        localStore?.saveRemoteProfile(DshRemoteProfile(
+        val profile = DshRemoteProfile(
             host = host.trim(),
             sshPort = sshPort.toIntOrNull() ?: 22,
             username = user.trim(),
             remoteDshPort = dshPort.toIntOrNull() ?: 3080,
             keyId = keyId,
             hostFingerprint = fingerprint,
-        ))
+            authToken = dshExtractLaunchToken(authToken),
+        )
+        localStore?.saveRemoteProfile(profile)
         fingerprintPending = ""
         error = ""
-        probeRemote(DshRemoteProfile(
-            host = host.trim(),
-            sshPort = sshPort.toIntOrNull() ?: 22,
-            username = user.trim(),
-            remoteDshPort = dshPort.toIntOrNull() ?: 3080,
-            keyId = keyId,
-            hostFingerprint = fingerprint,
-        ))
+        probeRemote(profile)
     }
 
     private fun openHome() {
@@ -395,11 +444,14 @@ internal class DshConnectionSetupPage : BasePager() {
                 DshConnectionMode.LOCAL -> "local"
                 DshConnectionMode.RELAY -> "relay"
                 DshConnectionMode.SSH -> "ssh"
+                DshConnectionMode.DIRECT -> "direct"
             })
             put("profileId", when (connectionMode) {
                 DshConnectionMode.RELAY -> relayHostId.ifEmpty { DshSessionScope.DEFAULT_REMOTE_PROFILE_ID }
+                DshConnectionMode.DIRECT -> dshDirectProfileId(directBaseUrl)
                 else -> DshSessionScope.DEFAULT_REMOTE_PROFILE_ID
             })
+            if (connectionMode == DshConnectionMode.DIRECT) put("baseUrl", directBaseUrl.trim().trimEnd('/'))
         })
     }
 
@@ -431,8 +483,8 @@ internal class DshConnectionSetupPage : BasePager() {
 
 private fun ViewContainer<*, *>.DshSetupModeButton(label: String, selected: () -> Boolean, onClick: () -> Unit) {
     View {
-        attr { flex(1f); height(40f); flexDirectionRow(); justifyContentCenter(); alignItemsCenter(); borderRadius(7f); backgroundColor(Color(if (selected()) 0xFFFFFFFF else 0x00FFFFFF)) }
-        Text { attr { text(label); fontSize(14f); color(Color(if (selected()) 0xFF4176E6 else 0xFF68737D)) } }
+        attr { flex(1f); height(40f); flexDirectionRow(); justifyContentCenter(); alignItemsCenter(); borderRadius(7f); backgroundColor(if (selected()) theme.surface else Color(0x00FFFFFF)) }
+        Text { attr { text(label); fontSize(14f); color(if (selected()) theme.accent else theme.textSecondary) } }
         event { click { onClick() } }
     }
 }
@@ -447,12 +499,12 @@ private fun ViewContainer<*, *>.DshSetupInput(
 ) {
     View {
         attr { flex(flexValue); marginLeft(marginLeft); flexDirectionColumn(); marginTop(12f) }
-        Text { attr { text(label); fontSize(12f); color(Color(0xFF68737D)) } }
+        Text { attr { text(label); fontSize(12f); color(theme.textSecondary) } }
         View {
-            attr { height(42f); marginTop(5f); paddingLeft(10f); paddingRight(10f); borderRadius(8f); backgroundColor(Color.WHITE); border(Border(1f, BorderStyle.SOLID, Color(0xFFD9DEE3))) }
+            attr { height(42f); marginTop(5f); paddingLeft(10f); paddingRight(10f); borderRadius(8f); backgroundColor(theme.inputBackground); border(Border(1f, BorderStyle.SOLID, theme.inputBorder)) }
             Input {
                 ref { it.view?.setText(value()) }
-                attr { flex(1f); fontSize(14f); color(Color(0xFF222C35)); placeholder(hint); placeholderColor(Color(0xFF98A1A9)); returnKeyTypeDone() }
+                attr { flex(1f); fontSize(14f); color(theme.textPrimary); placeholder(hint); placeholderColor(theme.placeholder); returnKeyTypeDone() }
                 event { textDidChange { onChange(it.text) } }
             }
         }

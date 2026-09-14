@@ -1,0 +1,29 @@
+{
+  "default": { "provider": "deepseek-official", "model": "deepseek-chat" },
+  "routableProviders": ["deepseek-official"],
+  "groups": [
+    {
+      "id": "deepseek-official",
+      "name": "DeepSeek",
+      "models": [
+        { "id": "deepseek-chat", "name": "DeepSeek Chat", "description": "General purpose chat model" },
+        {
+          "id": "deepseek-reasoner",
+          "name": "DeepSeek Reasoner",
+          "description": "Reasoning model with visible thinking",
+          "reasoning": { "defaultEffort": "high", "efforts": ["low", "medium", "high"] }
+        }
+      ]
+    },
+    {
+      "id": "mock",
+      "name": "Mock",
+      "models": [
+        { "id": "mock-chat", "name": "Mock Chat", "description": "Replays fixture scenarios" }
+      ]
+    }
+  ],
+  "failures": [
+    { "id": "openai-compatible", "name": "OpenAI compatible", "message": "OPENAI_API_KEY is not configured" }
+  ]
+}

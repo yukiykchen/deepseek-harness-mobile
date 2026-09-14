@@ -13,6 +13,8 @@ private object EmptyDshLocalStore : DshLocalStore {
     override fun saveRelayProfile(profile: DshRelayProfile) = Unit
     override fun clearRelayProfile() = Unit
     override fun migrateLegacyRemoteProfile(profile: DshLegacyRemoteProfile): Boolean = false
+    override fun loadSetting(key: String): String = ""
+    override fun saveSetting(key: String, value: String) = Unit
     override fun loadSessions(connectionId: String): List<DshSession> = emptyList()
     override fun replaceSessions(connectionId: String, sessions: List<DshSession>) = Unit
     override fun loadMessages(connectionId: String, sessionId: String): List<DshMessage> = emptyList()

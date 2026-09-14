@@ -1,0 +1,14 @@
+{
+  "id": "markdown",
+  "match": ["default"],
+  "description": "Default reply: headings, lists, quote, table, links, inline code and a fenced block; exercises incremental Markdown.",
+  "steps": [
+    { "kind": "reasoning", "text": "The user asked: \"{{prompt}}\". I should answer with a compact Markdown overview that covers headings, a list, a table and a code sample so the renderer is exercised end to end.", "chunk": 18, "delayMs": 25 },
+    {
+      "kind": "text",
+      "chunk": 14,
+      "delayMs": 28,
+      "text": "## You asked\n\n> {{prompt}}\n\nHere is a **structured** answer with _emphasis_, `inline code` and a [link to Kuikly](https://kuikly.tds.qq.com).\n\n### Key points\n\n1. Streaming renders block by block; sealed blocks never re-layout.\n2. Tables and quotes arrive in the same stream.\n3. Fenced code is rendered provisionally while the fence is still open.\n\n- Light and dark themes share one token set\n- Copy works on the whole message or on one code block\n\n| Feature | Status |\n| --- | --- |\n| Markdown | ✅ |\n| Tables | ✅ |\n| LaTeX | ✅ (see the `latex` scenario) |\n\n```kotlin\nfun greet(name: String): String {\n    return \"Hello, $name\"\n}\n```\n\nThat is the end of the reply."
+    }
+  ]
+}

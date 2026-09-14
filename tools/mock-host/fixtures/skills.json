@@ -1,0 +1,7 @@
+{
+  "skills": [
+    { "name": "commit", "description": "Write a conventional commit message for staged changes", "whenToUse": "After staging files", "modelInvocable": true },
+    { "name": "review", "description": "Review the current diff for bugs and style", "modelInvocable": true },
+    { "name": "compact", "description": "Compact the conversation context", "modelInvocable": false }
+  ]
+}

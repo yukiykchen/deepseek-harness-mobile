@@ -1,0 +1,8 @@
+{
+  "maxImageBytes": 20971520,
+  "maxImagesPerMessage": 4,
+  "maxMessageImageBytes": 41943040,
+  "maxImagePixels": 33554432,
+  "maxImageDimension": 8192,
+  "mediaTypes": ["image/png", "image/jpeg", "image/webp", "image/gif"]
+}

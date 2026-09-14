@@ -1,0 +1,25 @@
+{
+  "sessions": [
+    {
+      "sessionId": "seed-kotlin-coroutines",
+      "title": "Kotlin coroutines primer",
+      "turns": [
+        {
+          "user": "Explain Kotlin coroutines in two paragraphs.",
+          "assistant": "Coroutines are lightweight threads managed by the Kotlin runtime. A `suspend` function can pause without blocking its carrier thread, so thousands of coroutines can share a small pool.\n\nStructured concurrency ties every coroutine to a `CoroutineScope`; cancelling the scope cancels its children, which keeps lifecycles predictable.\n\n```kotlin\nfun main() = runBlocking {\n    val job = launch { delay(100); println(\"done\") }\n    job.join()\n}\n```"
+        }
+      ]
+    },
+    {
+      "sessionId": "seed-archived-notes",
+      "title": "Archived meeting notes",
+      "archived": true,
+      "turns": [
+        {
+          "user": "Summarize yesterday's standup.",
+          "assistant": "- Relay reconnect bug fixed\n- Image upload prevalidation in progress\n- Dark mode review scheduled"
+        }
+      ]
+    }
+  ]
+}

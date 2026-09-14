@@ -29,6 +29,9 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
     private var navigationBarContrastBeforeDim: Boolean? = null
     private var sshKeyCallback: KuiklyRenderCallback? = null
 
+    /** Keeps the offscreen print WebView alive until the print adapter takes over. */
+    private var printWebView: android.webkit.WebView? = null
+
     init {
         activeInstance = this
     }
@@ -95,12 +98,24 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 setSystemBarsDimmed(params)
             }
 
+            "setStatusBarStyle" -> {
+                setStatusBarStyle(params)
+            }
+
+            "shareText" -> {
+                shareText(params)
+            }
+
+            "shareHtml" -> shareHtml(params)
+            "printHtml" -> printHtml(params)
+
             "pickSshKey" -> pickSshKey(callback)
             "importSshKey" -> importSshKey(params, callback)
             "validateSshKey" -> validateSshKey(params, callback)
             "deleteSshKey" -> deleteSshKey(params)
             "startSshKeepAlive" -> startSshKeepAlive()
             "stopSshKeepAlive" -> stopSshKeepAlive()
+            "mintAuthCookie" -> mintAuthCookie(params, callback)
 
             else -> callback?.invoke(
                 mapOf(
@@ -228,6 +243,89 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
         }
     }
 
+    private fun shareText(params: String?) {
+        val json = JSONObject(params ?: "{}")
+        val text = json.optString("text")
+        if (text.isEmpty()) return
+        val title = json.optString("title")
+        val act = activity ?: return
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            if (title.isNotEmpty()) putExtra(Intent.EXTRA_SUBJECT, title)
+        }
+        runCatching { act.startActivity(Intent.createChooser(send, title.ifEmpty { null })) }
+    }
+
+    /** Shares an `.html` file through the same FileProvider the camera capture uses. */
+    private fun shareHtml(params: String?) {
+        val json = JSONObject(params ?: "{}")
+        val html = json.optString("html")
+        if (html.isEmpty()) return
+        val title = json.optString("title")
+        val act = activity ?: return
+        val file = runCatching {
+            val dir = java.io.File(act.cacheDir, "exports").apply { mkdirs() }
+            java.io.File(dir, "${exportFileName(title)}.html").apply { writeText(html) }
+        }.getOrNull() ?: return
+        val uri = runCatching {
+            androidx.core.content.FileProvider.getUriForFile(act, "${act.packageName}.fileprovider", file)
+        }.getOrNull() ?: return
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/html"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            if (title.isNotEmpty()) putExtra(Intent.EXTRA_SUBJECT, title)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { act.startActivity(Intent.createChooser(send, title.ifEmpty { null })) }
+    }
+
+    /**
+     * Renders the transcript in an offscreen WebView and hands it to the print framework,
+     * whose built-in "Save as PDF" destination is the PDF export. The WebView has to
+     * outlive this call, so the adapter keeps the only reference until printing starts.
+     */
+    private fun printHtml(params: String?) {
+        val json = JSONObject(params ?: "{}")
+        val html = json.optString("html")
+        if (html.isEmpty()) return
+        val jobName = json.optString("title").ifEmpty { "DSH conversation" }
+        val act = activity ?: return
+        act.runOnUiThread {
+            val webView = android.webkit.WebView(act)
+            webView.webViewClient = object : android.webkit.WebViewClient() {
+                override fun onPageFinished(view: android.webkit.WebView, url: String?) {
+                    val printManager = act.getSystemService(Context.PRINT_SERVICE) as? android.print.PrintManager
+                    runCatching {
+                        printManager?.print(
+                            jobName,
+                            view.createPrintDocumentAdapter(jobName),
+                            android.print.PrintAttributes.Builder().build(),
+                        )
+                    }
+                    printWebView = null
+                }
+            }
+            printWebView = webView
+            webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+        }
+    }
+
+    /** Safe, recognisable file stem for an exported transcript. */
+    private fun exportFileName(title: String): String {
+        val cleaned = title.trim().map { if (it.isLetterOrDigit()) it else '-' }
+            .joinToString("").trim('-').take(40)
+        return cleaned.ifEmpty { "dsh-conversation" }
+    }
+
+    /** Dark app themes need light status-bar glyphs, and vice versa. */
+    private fun setStatusBarStyle(params: String?) {
+        val dark = JSONObject(params ?: "{}").optInt("dark") == 1
+        activity?.runOnUiThread {
+            (activity as? KuiklyRenderActivity)?.applyThemeChrome(dark)
+        }
+    }
+
     private fun pickSshKey(callback: KuiklyRenderCallback?) {
         sshKeyCallback = callback
         val act = activity ?: run {
@@ -326,6 +424,57 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
         callback?.invoke(mapOf("valid" to valid))
     }
 
+    /**
+     * DSH >= 0.1.2 browser-session bootstrap: `GET {baseUrl}/?token=` answers
+     * `303` + `Set-Cookie`. Redirects must stay disabled or the cookie is lost
+     * when the client follows to `/` without it.
+     */
+    private fun mintAuthCookie(params: String?, callback: KuiklyRenderCallback?) {
+        val json = JSONObject(params ?: "{}")
+        val baseUrl = json.optString("baseUrl").trimEnd('/')
+        val token = json.optString("token")
+        val bearer = json.optString("bearer")
+        if (baseUrl.isEmpty() || token.isEmpty()) {
+            callback?.invoke(mapOf("cookie" to "", "status" to 0, "message" to "missing baseUrl or token"))
+            return
+        }
+        Thread {
+            val result = runCatching {
+                val request = okhttp3.Request.Builder()
+                    .url("$baseUrl/?token=${Uri.encode(token)}")
+                    .get()
+                    .apply { if (bearer.isNotEmpty()) header("Authorization", "Bearer $bearer") }
+                    .build()
+                AUTH_CLIENT.newCall(request).execute().use { response ->
+                    val cookies = response.headers("Set-Cookie")
+                        .flatMap { splitSetCookie(it) }
+                        .mapNotNull { it.split(";").firstOrNull()?.trim()?.takeIf { pair -> pair.contains('=') } }
+                    val cookie = cookies.firstOrNull { it.startsWith("dsh-auth-") } ?: cookies.firstOrNull().orEmpty()
+                    mapOf(
+                        "cookie" to cookie,
+                        "status" to response.code,
+                        "message" to if (cookie.isEmpty()) "HTTP ${response.code}: no session cookie returned" else "",
+                    )
+                }
+            }.getOrElse { error ->
+                mapOf("cookie" to "", "status" to 0, "message" to (error.message ?: "request failed"))
+            }
+            activity?.runOnUiThread { callback?.invoke(result) } ?: callback?.invoke(result)
+        }.start()
+    }
+
+    /** The relay gateway may serialize a multi-value header as a JSON array string. */
+    private fun splitSetCookie(value: String): List<String> {
+        val trimmed = value.trim()
+        if (trimmed.startsWith("[")) {
+            return runCatching {
+                val array = JSONArray(trimmed)
+                (0 until array.length()).map { array.optString(it) }
+            }.getOrDefault(listOf(value))
+        }
+        return listOf(value)
+    }
+
     private fun startSshKeepAlive() {
         val intent = Intent(context, DshSshForegroundService::class.java)
         if (Build.VERSION.SDK_INT >= 26) context?.startForegroundService(intent) else context?.startService(intent)
@@ -363,6 +512,12 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
         const val REQUEST_SSH_KEY = 4091
         const val REQUEST_SSH_KEY_PERMISSION = 4092
         private var activeInstance: KRBridgeModule? = null
+        private val AUTH_CLIENT = okhttp3.OkHttpClient.Builder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
 
         fun dispatchActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
             activeInstance?.onActivityResult(requestCode, resultCode, data)

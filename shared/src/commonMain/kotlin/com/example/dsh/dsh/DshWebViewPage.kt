@@ -38,7 +38,7 @@ internal class DshWebViewPage : BasePager() {
                 attr {
                     flex(1f)
                     flexDirectionColumn()
-                    backgroundColor(Color(0xFFF7F9FA))
+                    backgroundColor(theme.background)
                     paddingTop(pagerData.statusBarHeight)
                 }
                 DshLinkHeader(
@@ -58,7 +58,7 @@ internal class DshWebViewPage : BasePager() {
                             attr {
                                 text("链接为空")
                                 fontSize(15f)
-                                color(Color(0xFF68737D))
+                                color(theme.textSecondary)
                             }
                         }
                     }
@@ -102,14 +102,14 @@ private class DshLinkHeader : ComposeView<DshLinkHeaderAttr, ComposeEvent>() {
                     alignItemsCenter()
                     paddingLeft(12f)
                     paddingRight(12f)
-                    backgroundColor(Color.WHITE)
-                    borderBottom(Border(1f, BorderStyle.SOLID, Color(0xFFE5E8EB)))
+                    backgroundColor(theme.surface)
+                    borderBottom(Border(1f, BorderStyle.SOLID, theme.divider))
                 }
                 Text {
                     attr {
                         text("返回")
                         fontSize(14f)
-                        color(Color(0xFF4176E6))
+                        color(theme.accent)
                     }
                     event { click { ctx.attr.onBack() } }
                 }
@@ -118,7 +118,7 @@ private class DshLinkHeader : ComposeView<DshLinkHeaderAttr, ComposeEvent>() {
                         text("链接")
                         marginLeft(18f)
                         fontSize(15f)
-                        color(Color(0xFF26313A))
+                        color(theme.textPrimary)
                         fontWeightBold()
                     }
                 }
@@ -127,7 +127,7 @@ private class DshLinkHeader : ComposeView<DshLinkHeaderAttr, ComposeEvent>() {
                     attr {
                         text(ctx.attr.status)
                         fontSize(12f)
-                        color(Color(0xFF7A8790))
+                        color(theme.textMuted)
                     }
                 }
                 Text {
@@ -135,7 +135,7 @@ private class DshLinkHeader : ComposeView<DshLinkHeaderAttr, ComposeEvent>() {
                         text("刷新")
                         marginLeft(14f)
                         fontSize(14f)
-                        color(Color(0xFF4176E6))
+                        color(theme.accent)
                     }
                     event { click { ctx.attr.onReload() } }
                 }
@@ -145,7 +145,7 @@ private class DshLinkHeader : ComposeView<DshLinkHeaderAttr, ComposeEvent>() {
                     attr {
                         height(2f)
                         width(ctx.attr.progress.toFloat() / 100f * pagerData.pageViewWidth)
-                        backgroundColor(Color(0xFF4176E6))
+                        backgroundColor(theme.accentFill)
                     }
                 }
             }

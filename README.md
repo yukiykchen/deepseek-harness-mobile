@@ -6,6 +6,10 @@
 
 App 启动后先选连接方式，再进入聊天。**扫码连电脑的完整启动命令见 [怎么启动（扫码连电脑）](#怎么启动扫码连电脑)。**
 
+装好之后怎么用（连接、主题、复制导出、图片、会话管理、插件、日志）见 **[docs/user-guide.md](docs/user-guide.md)**。
+
+文档索引：[用户指南](docs/user-guide.md) · [App ↔ Host 协议](docs/app-host-protocol.md) · [设计说明](docs/design.md) · [需求对照清单](docs/requirements-checklist.md) · [演示录制脚本](docs/demo-runsheet.md)
+
 - **扫码连接**：扫描电脑 DSH Settings 里的二维码，经 Relay 访问电脑上的 Harness。
 - **SSH**：用本机端口转发连到电脑上的 DSH。
 
@@ -20,7 +24,7 @@ App 启动后先选连接方式，再进入聊天。**扫码连电脑的完整�
 DeepSeek Harness 本身是一个插件化 Agent 运行时。本仓库提供 Android / iOS 宿主：
 
 - 使用 Kuikly/Kotlin Multiplatform 实现主要 UI 和跨平台协议层；
-- 扫码 / SSH 远程模式用 HTTP RPC + WebSocket（`events.mux`）；
+- 扫码 / SSH / 直连模式用 HTTP RPC + WebSocket（`/api/remote.mux`），对接 DSH 0.1.5 的浏览器会话登录（cookie）；
 - 按连接模式隔离会话列表和消息缓存；
 - 通过扫码 Relay 或 SSH 隧道连接电脑上的 DSH Host。
 
@@ -34,7 +38,8 @@ DeepSeek Harness 本身是一个插件化 Agent 运行时。本仓库提供 Andr
 | 远程 SSH | SSH | 电脑 DSH | SSH 本地转发 + WebSocket | 电脑 | `ssh:default` |
 | 手机本地 | （独立 App） | 见 DSH Local | 本机 HTTP + SSE | 手机 | `local` |
 
-App 连上 Host 之后的 JSON-RPC、事件流和会话时间线见 **[docs/app-host-protocol.md](docs/app-host-protocol.md)**。
+App 连上 Host 之后的 JSON-RPC、事件流和会话时间线见 **[docs/app-host-protocol.md](docs/app-host-protocol.md)**；
+消息模型、流式状态机、附件协议和导出格式见 **[docs/design.md](docs/design.md)**。
 
 两种远程模式互不影响。从扫码切到 SSH 后，看不到另一套缓存，这是预期行为。
 
@@ -331,22 +336,36 @@ adb install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk
 
 App 先打开「连接 DSH」，不会启动内嵌内核。
 
-**扫码连接**进入首页后：恢复 Relay 配对、经 Relay 建隧道、在本机 loopback 上连远程 `events.mux`（WebSocket）。
+**扫码连接**进入首页后：恢复 Relay 配对、经 Relay 建隧道、通过插件获取 `dsh web` 登录 token 换取 cookie，再在本机 loopback 上连远程 `/api/remote.mux`（WebSocket）。
 
 **SSH** 进入首页后：建立本地端口转发，再按远程 Host 协议拉会话。
 
 ## 当前支持的能力
 
-当前首页主要提供一个移动端 Harness Chat 界面，包括：
+当前首页主要提供一个移动端 Harness Chat 界面。逐项使用说明见 **[docs/user-guide.md](docs/user-guide.md)**。
+
+对话本身：
 
 - 创建和切换会话；
 - 恢复会话历史；
 - 查询可用模型并切换模型；
-- Markdown 消息渲染；
-- 流式回答；
+- Markdown 消息渲染（标题、列表、引用、表格、链接、行内代码、代码块高亮）；
+- LaTeX 公式渲染：行内 `$…$` 就地转成 Unicode，独立成段的 `$$…$$` 单独成行（分数、根号、上下标、希腊字母、求和、矩阵）；分块到达的公式在闭合前保持纯文本，无法渲染的公式回退为源码，可单独复制公式源码；
+- 流式回答，逐块渲染，已完成的块不再重排；
 - 取消当前请求；
-- 展示工具调用事件；
+- 展示工具调用事件，可展开输出、终端/JSON 列表和文件 diff；
+- 工具审批和 Agent 提问的应答界面；
+- 排队消息（编辑 / 删除 / 转向）；
 - 本地 SQLite 会话和消息缓存。
+
+界面与功能扩展：
+
+- **主题**：浅色 / 深色 / 跟随系统 / 日出日落 / 高对比度，工具输出可用独立的代码主题；即时生效并持久化。日出日落按设备时钟和时区估算，不申请定位权限；
+- **选择、复制与导出**：长按消息可局部选择、整条复制、单独复制某个代码块，多选若干条一起导出，或把整个会话导出为 Markdown、HTML，或经系统打印面板「另存为 PDF」；
+- **图片附件**：相册多选与拍照，发送前预览和移除，按 Host 的 `imageLimits` 预校验并给出可读原因，气泡内缩略图与全屏查看，重开会话按 `attachmentId` 还原；
+- **会话管理**：重命名（`session.rename`）、归档（`workspace.archiveSession`，需确认且说明只是隐藏）、独立的归档列表；
+- **插件列表**：读取 Host 的 `pluginInventory/list`，支持按名称搜索、按状态筛选、查看失败原因，只读因此不提供启停按钮；
+- **日志中心**：连接、RPC、mux/host 帧和会话事件的结构化记录，支持等级 / 会话 / 时间 / 类型 / 关键词筛选、详情查看、复制、脱敏导出和本地清除。
 
 ## 目录结构
 
@@ -402,6 +421,26 @@ ohosApp/                             # OpenHarmony 宿主工程
 - 手机是否可以访问 Relay / SSH 主机；
 - 当前选择的模型是否可用；
 - 手机时间是否正确，避免 TLS 或鉴权异常。
+
+## 不接电脑 DSH 的开发与验收：mock Host
+
+`tools/mock-host` 是一个用 Node 写的回放式 Host，说的是和真 Host 完全一样的 0.1.5 协议：cookie 登录、
+`/api/remote.mux` 的逻辑流、一元 RPC 的 `client-request` 信封。不需要 API Key，也不需要 Relay。
+
+```bash
+export PATH="/opt/homebrew/opt/node@22/bin:$PATH"   # 需要 Node 22
+cd tools/mock-host && npm install
+node src/server.js --host 0.0.0.0 --port 3080 --token dev-token
+npm test                                            # 5 个端到端子测试
+```
+
+App 侧选 **直连**，地址填 `http://10.0.2.2:3080`（模拟器）或电脑的局域网 IP（真机）。
+
+发什么话触发什么剧本由关键字决定：默认 markdown，另有 `latex`、`tool`、`image`、`fail`、`approve`、
+`ask`、`long`。剧本在 `fixtures/scenarios/`，会话种子在 `fixtures/seed-sessions.json`（含一个已归档会话），
+插件清单、模型目录和 `imageLimits` 也都在 `fixtures/` 下，直接改就能造场景。
+
+录演示视频的分镜和踩坑见 **[docs/demo-runsheet.md](docs/demo-runsheet.md)**。
 
 ## 开发说明
 

@@ -155,7 +155,13 @@ internal class DshRelayLoopbackServer(
                     responseHeaders?.keys()?.forEach { key ->
                         val name = key as String
                         if (name.equals("content-length", true) || name.equals("transfer-encoding", true)) return@forEach
-                        writeRaw(output, "$name: ${responseHeaders.optString(name)}\r\n")
+                        // Node serializes multi-value headers (Set-Cookie) as arrays; emit one line each.
+                        val values = responseHeaders.optJSONArray(name)
+                        if (values != null) {
+                            for (index in 0 until values.length()) writeRaw(output, "$name: ${values.optString(index)}\r\n")
+                        } else {
+                            writeRaw(output, "$name: ${responseHeaders.optString(name)}\r\n")
+                        }
                     }
                     writeRaw(output, "\r\n")
                     headerWritten = true

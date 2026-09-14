@@ -23,6 +23,7 @@ internal fun ViewContainer<*, *>.DshConnectionSettingsModal(
     dshPort: () -> String,
     keyLabel: () -> String,
     keyPassphrase: () -> String,
+    authToken: () -> String,
     busy: () -> Boolean,
     error: () -> String,
     onModeChange: (Boolean) -> Unit,
@@ -32,13 +33,15 @@ internal fun ViewContainer<*, *>.DshConnectionSettingsModal(
     onDshPortChange: (String) -> Unit,
     onPickKey: () -> Unit,
     onPassphraseChange: (String) -> Unit,
+    onAuthTokenChange: (String) -> Unit,
+    onApplyAuthToken: () -> Unit,
     onTrustFingerprint: () -> Unit,
     onSave: () -> Unit,
     onClose: () -> Unit,
     onOpenApiKey: () -> Unit,
 ) {
     Modal(inWindow = true) {
-        attr { absolutePositionAllZero(); allCenter(); backgroundColor(Color(0x66000000)); padding(20f) }
+        attr { absolutePositionAllZero(); allCenter(); backgroundColor(theme.mask); padding(20f) }
         View {
             attr {
                 width(pagerData.pageViewWidth - 40f)
@@ -46,32 +49,38 @@ internal fun ViewContainer<*, *>.DshConnectionSettingsModal(
                 flexDirectionColumn()
                 padding(22f)
                 borderRadius(16f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(theme.surface)
             }
             View {
                 attr { height(32f); flexDirectionRow(); alignItemsCenter() }
-                Text { attr { text("连接设置"); flex(1f); fontSize(20f); fontWeightBold(); color(Color(0xFF1F2933)) } }
-                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f) } }; DshHitButton { if (!busy()) onClose() } }
+                Text { attr { text("连接设置"); flex(1f); fontSize(20f); fontWeightBold(); color(theme.textPrimary) } }
+                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f); tintColor(theme.textSecondary) } }; DshHitButton { if (!busy()) onClose() } }
             }
-            Text { attr { text("选择 Agent 运行位置"); marginTop(16f); fontSize(13f); color(Color(0xFF68737D)) } }
+            Text { attr { text("选择 Agent 运行位置"); marginTop(16f); fontSize(13f); color(theme.textSecondary) } }
             View {
-                attr { height(42f); marginTop(8f); flexDirectionRow(); borderRadius(8f); backgroundColor(Color(0xFFF1F3F5)); padding(4f) }
+                attr { height(42f); marginTop(8f); flexDirectionRow(); borderRadius(8f); backgroundColor(theme.surfaceSunken); padding(4f) }
                 View {
-                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(Color(if (!sshMode()) 0xFFFFFFFF else 0x00FFFFFF)); borderRadius(6f) }
-                    Text { attr { text("扫码连接"); fontSize(13f); color(Color(if (!sshMode()) 0xFF4176E6 else 0xFF68737D)) } }
+                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(if (!sshMode()) theme.surface else Color(0x00FFFFFF)); borderRadius(6f) }
+                    Text { attr { text("扫码连接"); fontSize(13f); color(if (!sshMode()) theme.accent else theme.textSecondary) } }
                     event { click { onModeChange(false) } }
                 }
                 View {
-                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(Color(if (sshMode()) 0xFFFFFFFF else 0x00FFFFFF)); borderRadius(6f) }
-                    Text { attr { text("SSH 连接电脑"); fontSize(13f); color(Color(if (sshMode()) 0xFF4176E6 else 0xFF68737D)) } }
+                    attr { flex(1f); height(34f); flexDirectionRow(); alignItemsCenter(); justifyContentCenter(); backgroundColor(if (sshMode()) theme.surface else Color(0x00FFFFFF)); borderRadius(6f) }
+                    Text { attr { text("SSH 连接电脑"); fontSize(13f); color(if (sshMode()) theme.accent else theme.textSecondary) } }
                     event { click { onModeChange(true) } }
                 }
             }
             vif({ !sshMode() }) {
-                Text { attr { text("扫码模式连接电脑上的 DSH。返回连接页可重新扫码或更换电脑。"); marginTop(16f); fontSize(14f); lineHeight(21f); color(Color(0xFF68737D)) } }
+                Text { attr { text("扫码模式连接电脑上的 DSH。返回连接页可重新扫码或更换电脑。"); marginTop(16f); fontSize(14f); lineHeight(21f); color(theme.textSecondary) } }
+                Text { attr { text("DSH 登录 token 由电脑端 dsh-scan-remote 插件自动提供。若提示登录失效，可在此粘贴 dsh web 打印的 token 重新登录。"); marginTop(10f); fontSize(12f); lineHeight(18f); color(theme.textMuted) } }
+                DshConnectionInput("dsh web 登录 token（可选）", authToken, "粘贴 token 或 dsh web 打印的完整 URL", onAuthTokenChange, password = true)
+                vif({ error().isNotEmpty() }) {
+                    Text { attr { text(error()); marginTop(8f); fontSize(12f); lineHeight(18f); color(theme.danger) } }
+                }
                 View {
-                    attr { height(40f); marginTop(16f); flexDirectionRow(); justifyContentFlexEnd() }
-                    Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(Color(0xFF4176E6)); titleAttr { text("返回连接页"); fontSize(14f); color(Color.WHITE) } }; event { click { if (!busy()) onSave() } } }
+                    attr { height(40f); marginTop(16f); flexDirectionRow(); justifyContentFlexEnd(); alignItemsCenter() }
+                    Text { attr { text("重新登录"); marginRight(14f); fontSize(14f); color(theme.accent) }; event { click { if (!busy()) onApplyAuthToken() } } }
+                    Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(theme.accentFill); titleAttr { text("返回连接页"); fontSize(14f); color(theme.textOnAccent) } }; event { click { if (!busy()) onSave() } } }
                 }
             }
             velse {
@@ -79,22 +88,28 @@ internal fun ViewContainer<*, *>.DshConnectionSettingsModal(
                 DshConnectionInput("SSH 用户名", user, "例如 alex", onUserChange)
                 View { attr { flexDirectionRow(); marginTop(12f) }; DshConnectionInput("SSH 端口", port, "22", onPortChange, 0.5f); DshConnectionInput("远程 DSH 端口", dshPort, "3080", onDshPortChange, 0.5f, 10f) }
                 View {
-                    attr { height(44f); marginTop(12f); flexDirectionRow(); alignItemsCenter(); paddingLeft(12f); paddingRight(10f); borderRadius(8f); backgroundColor(Color(0xFFF1F3F5)) }
-                    Text { attr { text(keyLabel()); flex(1f); fontSize(13f); color(Color(0xFF4F565C)) } }
-                    Text { attr { text(if (busy()) "导入中..." else "选择私钥"); fontSize(13f); color(Color(0xFF4176E6)) }; event { click { if (!busy()) onPickKey() } } }
+                    attr { height(44f); marginTop(12f); flexDirectionRow(); alignItemsCenter(); paddingLeft(12f); paddingRight(10f); borderRadius(8f); backgroundColor(theme.surfaceSunken) }
+                    Text { attr { text(keyLabel()); flex(1f); fontSize(13f); color(theme.textSecondary) } }
+                    Text { attr { text(if (busy()) "导入中..." else "选择私钥"); fontSize(13f); color(theme.accent) }; event { click { if (!busy()) onPickKey() } } }
                 }
                 DshConnectionInput("私钥口令（如有）", keyPassphrase, "仅本次连接使用", onPassphraseChange, password = true)
+                DshConnectionInput("dsh web 登录 token", authToken, "粘贴 dsh web 打印的 token 或完整 URL", onAuthTokenChange, password = true)
+                Text { attr { text("DSH 0.1.2+ 要求浏览器登录。token 在电脑端 `dsh web` 启动时打印，每次重启 DSH 都会变化。"); marginTop(6f); fontSize(12f); lineHeight(18f); color(theme.textMuted) } }
+                View {
+                    attr { height(28f); marginTop(4f); flexDirectionRow(); justifyContentFlexEnd() }
+                    Text { attr { text("使用此 token 重新登录"); fontSize(13f); color(theme.accent) }; event { click { if (!busy()) onApplyAuthToken() } } }
+                }
                 vif({ error().startsWith("首次连接需要确认主机指纹：") }) {
                     View {
-                        attr { marginTop(10f); padding(10f); borderRadius(8f); backgroundColor(Color(0xFFFFF7E6)) }
-                        Text { attr { text("请确认这是你电脑的 SSH 主机指纹。确认后会保存，指纹变化时连接将被拒绝。"); fontSize(12f); lineHeight(18f); color(Color(0xFF7A5B16)) } }
-                        Text { attr { text("信任此指纹并连接"); marginTop(8f); fontSize(13f); color(Color(0xFF4176E6)) }; event { click { if (!busy()) onTrustFingerprint() } } }
+                        attr { marginTop(10f); padding(10f); borderRadius(8f); backgroundColor(theme.warningSoft) }
+                        Text { attr { text("请确认这是你电脑的 SSH 主机指纹。确认后会保存，指纹变化时连接将被拒绝。"); fontSize(12f); lineHeight(18f); color(theme.warningText) } }
+                        Text { attr { text("信任此指纹并连接"); marginTop(8f); fontSize(13f); color(theme.accent) }; event { click { if (!busy()) onTrustFingerprint() } } }
                     }
                 }
                 vif({ error().isNotEmpty() && !error().startsWith("首次连接需要确认主机指纹：") }) {
-                    Text { attr { text(error()); marginTop(8f); fontSize(12f); lineHeight(18f); color(Color(0xFFBF3535)) } }
+                    Text { attr { text(error()); marginTop(8f); fontSize(12f); lineHeight(18f); color(theme.danger) } }
                 }
-                View { attr { marginTop(18f); height(40f); flexDirectionRow(); justifyContentFlexEnd() }; Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(Color(if (busy()) 0xFFB7C8FE else 0xFF4176E6)); titleAttr { text(if (busy()) "连接中..." else "保存并连接"); fontSize(14f); color(Color.WHITE) } }; event { click { if (!busy()) onSave() } } } }
+                View { attr { marginTop(18f); height(40f); flexDirectionRow(); justifyContentFlexEnd() }; Button { attr { width(132f); height(40f); borderRadius(8f); backgroundColor(if (busy()) theme.accentFillDisabled else theme.accentFill); titleAttr { text(if (busy()) "连接中..." else "保存并连接"); fontSize(14f); color(theme.textOnAccent) } }; event { click { if (!busy()) onSave() } } } }
             }
         }
     }
@@ -111,12 +126,12 @@ internal fun ViewContainer<*, *>.DshConnectionInput(
 ) {
     View {
         attr { flex(flexValue); marginLeft(marginLeft); flexDirectionColumn() }
-        Text { attr { text(title); marginTop(10f); fontSize(12f); color(Color(0xFF68737D)) } }
+        Text { attr { text(title); marginTop(10f); fontSize(12f); color(theme.textSecondary) } }
         View {
-            attr { height(40f); marginTop(5f); borderRadius(8f); border(Border(1f, BorderStyle.SOLID, Color(0xFFD9DEE3))); backgroundColor(Color(0xFFF9FAFB)); paddingLeft(10f); paddingRight(10f) }
+            attr { height(40f); marginTop(5f); borderRadius(8f); border(Border(1f, BorderStyle.SOLID, theme.inputBorder)); backgroundColor(theme.inputBackground); paddingLeft(10f); paddingRight(10f) }
             Input {
                 ref { it.view?.setText(value()) }
-                attr { flex(1f); fontSize(14f); color(Color(0xFF222C35)); placeholder(hint); placeholderColor(Color(0xFF98A1A9)); returnKeyTypeDone(); if (password) keyboardTypePassword() }
+                attr { flex(1f); fontSize(14f); color(theme.textPrimary); placeholder(hint); placeholderColor(theme.placeholder); returnKeyTypeDone(); if (password) keyboardTypePassword() }
                 event { textDidChange { onChange(it.text) } }
             }
         }
@@ -138,7 +153,7 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
             allCenter()
             paddingLeft(20f)
             paddingRight(20f)
-            backgroundColor(Color(0x66000000))
+            backgroundColor(theme.mask)
         }
         View {
             attr {
@@ -147,7 +162,7 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                 flexDirectionColumn()
                 padding(24f)
                 borderRadius(18f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(theme.surface)
             }
             View {
                 attr {
@@ -161,7 +176,7 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                         flex(1f)
                         fontSize(20f)
                         fontWeightBold()
-                        color(Color(0xFF1F2933))
+                        color(theme.textPrimary)
                     }
                 }
                 View {
@@ -173,6 +188,7 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                         attr {
                             src(ImageUri.commonAssets("x.svg"))
                             size(20f, 20f)
+                            tintColor(theme.textSecondary)
                         }
                     }
                     DshHitButton { if (!busy()) onClose() }
@@ -184,7 +200,7 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                     marginTop(8f)
                     fontSize(14f)
                     lineHeight(21f)
-                    color(Color(0xFF6B7680))
+                    color(theme.textSecondary)
                 }
             }
             Text {
@@ -193,7 +209,7 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                     marginTop(22f)
                     fontSize(13f)
                     fontWeightMedium()
-                    color(Color(0xFF343E47))
+                    color(theme.textSecondary)
                 }
             }
             View {
@@ -201,10 +217,10 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                     height(46f)
                     marginTop(8f)
                     borderRadius(8f)
-                    border(Border(1f, BorderStyle.SOLID, Color(
-                        if (error().isEmpty()) 0xFFD9DEE3 else 0xFFD44949,
-                    )))
-                    backgroundColor(Color(0xFFF9FAFB))
+                    border(Border(1f, BorderStyle.SOLID,
+                        if (error().isEmpty()) theme.inputBorder else theme.danger,
+                    ))
+                    backgroundColor(theme.inputBackground)
                     paddingLeft(12f)
                     paddingRight(12f)
                 }
@@ -213,9 +229,9 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                     attr {
                         flex(1f)
                         fontSize(15f)
-                        color(Color(0xFF222C35))
+                        color(theme.textPrimary)
                         placeholder("输入 DeepSeek API Key")
-                        placeholderColor(Color(0xFF98A1A9))
+                        placeholderColor(theme.placeholder)
                         keyboardTypePassword()
                         returnKeyTypeDone()
                         autofocus(true)
@@ -234,7 +250,7 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                         marginTop(8f)
                         fontSize(12f)
                         lineHeight(18f)
-                        color(Color(0xFFBF3535))
+                        color(theme.danger)
                     }
                 }
             }
@@ -250,17 +266,715 @@ internal fun ViewContainer<*, *>.DshCredentialSetupModal(
                         width(132f)
                         height(40f)
                         borderRadius(8f)
-                        backgroundColor(Color(if (busy()) 0xFFB7C8FE else 0xFF4176E6))
+                        backgroundColor(if (busy()) theme.accentFillDisabled else theme.accentFill)
                         titleAttr {
                             text(if (busy()) "保存中..." else "保存并继续")
                             fontSize(14f)
-                            color(Color.WHITE)
+                            color(theme.textOnAccent)
                         }
                     }
                     event { click { if (!busy()) onSave() } }
                 }
             }
         }
+    }
+}
+
+/** Task 2 long-press menu for one conversation row. New UI copy is English. */
+internal fun ViewContainer<*, *>.DshMessageActionSheet(
+    codeBlockCount: () -> Int,
+    formulaCount: () -> Int,
+    onSelectText: () -> Unit,
+    onSelectMessages: () -> Unit,
+    onCopyMessage: () -> Unit,
+    onCopyCodeBlock: (Int) -> Unit,
+    onCopyFormula: (Int) -> Unit,
+    onExportConversation: () -> Unit,
+    onExportHtml: () -> Unit,
+    onPrintConversation: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Modal(inWindow = true) {
+        attr {
+            absolutePositionAllZero()
+            flexDirectionColumn()
+            justifyContentFlexEnd()
+            backgroundColor(theme.maskLight)
+        }
+        View {
+            attr { flex(1f) }
+            event { click { onClose() } }
+        }
+        View {
+            attr {
+                flexDirectionColumn()
+                padding(12f, 14f, 22f, 14f)
+                borderRadius(20f)
+                backgroundColor(theme.surface)
+            }
+            DshActionSheetRow("Select text", "Long-press handles to adjust the range") { onSelectText() }
+            DshActionSheetRow("Copy message", "Readable body text, cards and attachments") { onCopyMessage() }
+            DshActionSheetRow("Select messages", "Pick several, then copy or export together") { onSelectMessages() }
+            vfor({
+                val blocks = ObservableList<Int>()
+                blocks.addAll((0 until codeBlockCount()).toList())
+                blocks
+            }) { index ->
+                DshActionSheetRow("Copy code block ${index + 1}", "Code only, without the fence") {
+                    onCopyCodeBlock(index)
+                }
+            }
+            vfor({
+                val formulas = ObservableList<Int>()
+                formulas.addAll((0 until formulaCount()).toList())
+                formulas
+            }) { index ->
+                DshActionSheetRow("Copy formula ${index + 1}", "LaTeX source, not the rendered form") {
+                    onCopyFormula(index)
+                }
+            }
+            DshActionSheetRow("Export conversation", "Share the whole transcript as Markdown") {
+                onExportConversation()
+            }
+            DshActionSheetRow("Export as HTML", "Share a formatted .html file") {
+                onExportHtml()
+            }
+            DshActionSheetRow("Print / save as PDF", "Opens the system print sheet") {
+                onPrintConversation()
+            }
+            View {
+                attr {
+                    height(46f); marginTop(8f); allCenter()
+                    borderRadius(12f); backgroundColor(theme.surfaceSunken)
+                }
+                Text { attr { text("Cancel"); fontSize(15f); color(theme.textSecondary) } }
+                event { click { onClose() } }
+            }
+        }
+    }
+}
+
+private fun ViewContainer<*, *>.DshActionSheetRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    View {
+        attr {
+            minHeight(54f)
+            marginBottom(6f)
+            flexDirectionColumn()
+            justifyContentCenter()
+            paddingLeft(14f)
+            paddingRight(14f)
+            borderRadius(12f)
+            backgroundColor(theme.surfaceRaised)
+        }
+        Text { attr { text(title); fontSize(15f); fontWeightMedium(); color(theme.textPrimary) } }
+        Text { attr { text(subtitle); marginTop(2f); fontSize(11f); color(theme.textMuted) } }
+        event { click { onClick() } }
+    }
+}
+
+/**
+ * Per-conversation management menu (Task 4). Only the operations the Host actually
+ * exposes are offered: `session/rename` and `workspace/archiveSession`. When the Host
+ * is not reachable both are disabled with the reason, rather than shown as buttons
+ * that cannot work.
+ */
+internal fun ViewContainer<*, *>.DshSessionActionSheet(
+    title: () -> String,
+    manageable: () -> Boolean,
+    unavailableReason: () -> String,
+    onRename: () -> Unit,
+    onArchive: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Modal(inWindow = true) {
+        attr {
+            absolutePositionAllZero()
+            flexDirectionColumn()
+            justifyContentFlexEnd()
+            backgroundColor(theme.maskLight)
+        }
+        View {
+            attr { flex(1f) }
+            event { click { onClose() } }
+        }
+        View {
+            attr {
+                flexDirectionColumn()
+                padding(12f, 14f, 22f, 14f)
+                borderRadius(20f)
+                backgroundColor(theme.surface)
+            }
+            Text {
+                attr {
+                    text(title())
+                    marginBottom(10f)
+                    marginLeft(4f)
+                    lines(1)
+                    fontSize(13f)
+                    fontWeightMedium()
+                    color(theme.textMuted)
+                }
+            }
+            vif({ manageable() }) {
+                DshActionSheetRow("Rename", "Change the title on the Host") { onRename() }
+                DshActionSheetRow("Archive", "Hides it from the main list; nothing is deleted") { onArchive() }
+            }
+            velse {
+                DshDisabledSheetRow("Rename", unavailableReason())
+                DshDisabledSheetRow("Archive", unavailableReason())
+            }
+            View {
+                attr {
+                    height(46f); marginTop(8f); allCenter()
+                    borderRadius(12f); backgroundColor(theme.surfaceSunken)
+                }
+                Text { attr { text("Cancel"); fontSize(15f); color(theme.textSecondary) } }
+                event { click { onClose() } }
+            }
+        }
+    }
+}
+
+private fun ViewContainer<*, *>.DshDisabledSheetRow(title: String, reason: String) {
+    View {
+        attr {
+            minHeight(54f)
+            marginBottom(6f)
+            flexDirectionColumn()
+            justifyContentCenter()
+            paddingLeft(14f)
+            paddingRight(14f)
+            borderRadius(12f)
+            backgroundColor(theme.surfaceSunken)
+        }
+        Text { attr { text(title); fontSize(15f); fontWeightMedium(); color(theme.textDisabled) } }
+        Text { attr { text(reason); marginTop(2f); fontSize(11f); lines(2); color(theme.textMuted) } }
+    }
+}
+
+/** `session/rename`. A title the Host refuses comes back as `session/title-invalid`. */
+internal fun ViewContainer<*, *>.DshRenameSessionModal(
+    draft: () -> String,
+    busy: () -> Boolean,
+    error: () -> String,
+    inputRef: (ViewRef<InputView>) -> Unit,
+    onDraftChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Modal(inWindow = true) {
+        attr { absolutePositionAllZero(); allCenter(); backgroundColor(theme.mask); padding(20f) }
+        View {
+            attr {
+                width(pagerData.pageViewWidth - 40f)
+                maxWidth(420f)
+                flexDirectionColumn()
+                padding(22f)
+                borderRadius(16f)
+                backgroundColor(theme.surface)
+            }
+            Text { attr { text("Rename conversation"); fontSize(19f); fontWeightBold(); color(theme.textPrimary) } }
+            View {
+                attr {
+                    height(46f)
+                    marginTop(16f)
+                    paddingLeft(12f)
+                    paddingRight(12f)
+                    justifyContentCenter()
+                    borderRadius(10f)
+                    backgroundColor(theme.inputBackground)
+                    border(Border(1f, BorderStyle.SOLID, if (error().isEmpty()) theme.inputBorder else theme.danger))
+                }
+                Input {
+                    ref { inputRef(it) }
+                    attr {
+                        height(44f)
+                        fontSize(15f)
+                        color(theme.textPrimary)
+                        placeholder("Conversation title")
+                        placeholderColor(theme.placeholder)
+                        returnKeyTypeSend()
+                        editable(!busy())
+                    }
+                    event {
+                        textDidChange { onDraftChange(it.text) }
+                        inputReturn { onSave() }
+                    }
+                }
+            }
+            vif({ error().isNotEmpty() }) {
+                Text {
+                    attr {
+                        text(error())
+                        marginTop(8f)
+                        fontSize(12f)
+                        lines(3)
+                        color(theme.dangerText)
+                    }
+                }
+            }
+            View {
+                attr { height(44f); marginTop(18f); flexDirectionRow() }
+                View {
+                    attr {
+                        flex(1f); marginRight(8f); allCenter()
+                        borderRadius(11f); backgroundColor(theme.surfaceSunken)
+                    }
+                    Text { attr { text("Cancel"); fontSize(15f); color(theme.textSecondary) } }
+                    DshHitButton { if (!busy()) onClose() }
+                }
+                View {
+                    attr {
+                        flex(1f); marginLeft(8f); allCenter()
+                        borderRadius(11f)
+                        // Not disabled on an empty draft: the Host is the authority on
+                        // titles and answers `session/title-invalid`, which is the error
+                        // the user has to see.
+                        backgroundColor(if (busy()) theme.accentFillDisabled else theme.accentFill)
+                    }
+                    Text {
+                        attr {
+                            text(if (busy()) "Saving…" else "Save")
+                            fontSize(15f)
+                            fontWeightMedium()
+                            color(theme.textOnAccent)
+                        }
+                    }
+                    DshHitButton { if (!busy()) onSave() }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Archiving is confirmed, and the copy has to say what it does: the Host only adds the
+ * id to its archive set, so logs and the workspace ledger stay intact.
+ */
+/**
+ * A plain confirmation. The body text comes from whoever is asking — for plugin
+ * lifecycle it is the Host's own `confirm-required` message, so the wording names the
+ * module the Host actually resolved rather than one the phone guessed at.
+ */
+internal fun ViewContainer<*, *>.DshConfirmModal(
+    title: String,
+    body: () -> String,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Modal(inWindow = true) {
+        attr { absolutePositionAllZero(); allCenter(); backgroundColor(theme.mask); padding(20f) }
+        View {
+            attr {
+                width(pagerData.pageViewWidth - 40f)
+                maxWidth(420f)
+                flexDirectionColumn()
+                padding(22f)
+                borderRadius(16f)
+                backgroundColor(theme.surface)
+            }
+            Text { attr { text(title); fontSize(19f); fontWeightBold(); color(theme.textPrimary) } }
+            Text {
+                attr {
+                    text(body())
+                    marginTop(10f)
+                    lines(4)
+                    fontSize(14f)
+                    lineHeight(20f)
+                    color(theme.textSecondary)
+                }
+            }
+            View {
+                attr { height(44f); marginTop(18f); flexDirectionRow() }
+                View {
+                    attr {
+                        flex(1f); marginRight(8f); allCenter()
+                        borderRadius(11f); backgroundColor(theme.surfaceSunken)
+                    }
+                    Text { attr { text("Cancel"); fontSize(15f); color(theme.textSecondary) } }
+                    DshHitButton { onCancel() }
+                }
+                View {
+                    attr {
+                        flex(1f); marginLeft(8f); allCenter()
+                        borderRadius(11f); backgroundColor(theme.accentFill)
+                    }
+                    Text { attr { text(confirmLabel); fontSize(15f); fontWeightMedium(); color(theme.textOnAccent) } }
+                    DshHitButton { onConfirm() }
+                }
+            }
+        }
+    }
+}
+
+internal fun ViewContainer<*, *>.DshArchiveConfirmModal(
+    title: () -> String,
+    busy: () -> Boolean,
+    error: () -> String,
+    onConfirm: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Modal(inWindow = true) {
+        attr { absolutePositionAllZero(); allCenter(); backgroundColor(theme.mask); padding(20f) }
+        View {
+            attr {
+                width(pagerData.pageViewWidth - 40f)
+                maxWidth(420f)
+                flexDirectionColumn()
+                padding(22f)
+                borderRadius(16f)
+                backgroundColor(theme.surface)
+            }
+            Text { attr { text("Archive this conversation?"); fontSize(19f); fontWeightBold(); color(theme.textPrimary) } }
+            Text {
+                attr {
+                    text(title())
+                    marginTop(10f)
+                    lines(2)
+                    fontSize(14f)
+                    fontWeightMedium()
+                    color(theme.textSecondary)
+                }
+            }
+            Text {
+                attr {
+                    text(
+                        "Archiving hides it from the main list. It is not deleted: the history, " +
+                            "the logs and the workspace entry stay on the Host, and you can open it " +
+                            "again from Archived.",
+                    )
+                    marginTop(10f)
+                    fontSize(12f)
+                    lineHeight(18f)
+                    color(theme.textMuted)
+                }
+            }
+            vif({ error().isNotEmpty() }) {
+                Text {
+                    attr { text(error()); marginTop(10f); fontSize(12f); lines(3); color(theme.dangerText) }
+                }
+            }
+            View {
+                attr { height(44f); marginTop(18f); flexDirectionRow() }
+                View {
+                    attr {
+                        flex(1f); marginRight(8f); allCenter()
+                        borderRadius(11f); backgroundColor(theme.surfaceSunken)
+                    }
+                    Text { attr { text("Cancel"); fontSize(15f); color(theme.textSecondary) } }
+                    DshHitButton { if (!busy()) onClose() }
+                }
+                View {
+                    attr {
+                        flex(1f); marginLeft(8f); allCenter()
+                        borderRadius(11f)
+                        backgroundColor(if (busy()) theme.accentFillDisabled else theme.dangerFill)
+                    }
+                    Text {
+                        attr {
+                            text(if (busy()) "Archiving…" else "Archive")
+                            fontSize(15f)
+                            fontWeightMedium()
+                            color(theme.textOnAccent)
+                        }
+                    }
+                    DshHitButton { if (!busy()) onConfirm() }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Host's archive set as its own list. Opening a row loads the same durable history
+ * the main list does; the App keeps no separate copy of the archive.
+ */
+internal fun ViewContainer<*, *>.DshArchiveListModal(
+    sessions: () -> ObservableList<DshSession>,
+    onOpen: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    Modal(inWindow = true) {
+        attr {
+            absolutePositionAllZero()
+            flexDirectionColumn()
+            justifyContentFlexEnd()
+            backgroundColor(theme.maskLight)
+        }
+        View {
+            attr { flex(1f) }
+            event { click { onClose() } }
+        }
+        View {
+            attr {
+                height((pagerData.pageViewHeight * 0.6f).coerceAtMost(520f))
+                flexDirectionColumn()
+                padding(18f)
+                borderRadius(20f)
+                backgroundColor(theme.surface)
+            }
+            View {
+                attr { height(32f); flexDirectionRow(); alignItemsCenter() }
+                Text { attr { text("Archived"); flex(1f); fontSize(19f); fontWeightBold(); color(theme.textPrimary) } }
+                View {
+                    attr { size(32f, 32f); allCenter() }
+                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f); tintColor(theme.textSecondary) } }
+                    DshHitButton { onClose() }
+                }
+            }
+            Text {
+                attr {
+                    text("Hidden from the main list. Opening one shows its complete history.")
+                    marginTop(4f)
+                    marginBottom(10f)
+                    fontSize(12f)
+                    color(theme.textMuted)
+                }
+            }
+            vif({ sessions().isEmpty() }) {
+                View {
+                    attr { flex(1f); allCenter() }
+                    Text { attr { text("No archived conversations"); fontSize(14f); color(theme.textMuted) } }
+                }
+            }
+            velse {
+                Scroller {
+                    attr { flex(1f) }
+                    vfor({ sessions() }) { session ->
+                        DshSessionDrawerRow(
+                            title = session.title,
+                            subtitle = session.workspace,
+                            active = false,
+                            running = session.running,
+                            onSelect = { onOpen(session.id) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Floating bar shown while a row is in text-selection mode. */
+internal fun ViewContainer<*, *>.DshSelectionBar(
+    onCopy: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDone: () -> Unit,
+) {
+    View {
+        attr {
+            absolutePosition(left = 0f, right = 0f, bottom = 0f)
+            height(58f)
+            flexDirectionRow()
+            alignItemsCenter()
+            justifyContentCenter()
+            zIndex(6)
+            backgroundColor(theme.surface)
+            borderTop(Border(1f, BorderStyle.SOLID, theme.divider))
+        }
+        DshSelectionBarButton("Copy", primary = true) { onCopy() }
+        DshSelectionBarButton("Select all", primary = false) { onSelectAll() }
+        DshSelectionBarButton("Done", primary = false) { onDone() }
+    }
+}
+
+/** Batch bar for Task 2's multi-message export. Mirrors [DshSelectionBar]'s placement. */
+internal fun ViewContainer<*, *>.DshBatchSelectionBar(
+    count: () -> Int,
+    onCopy: () -> Unit,
+    onExport: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    View {
+        attr {
+            absolutePosition(left = 0f, right = 0f, bottom = 0f)
+            height(58f)
+            flexDirectionRow()
+            alignItemsCenter()
+            paddingLeft(14f)
+            paddingRight(8f)
+            zIndex(6)
+            backgroundColor(theme.surface)
+            borderTop(Border(1f, BorderStyle.SOLID, theme.divider))
+        }
+        Text {
+            attr {
+                text(count().let { if (it == 1) "1 message" else "$it messages" })
+                flex(1f)
+                fontSize(14f)
+                color(theme.textSecondary)
+            }
+        }
+        DshSelectionBarButton("Copy", primary = false) { onCopy() }
+        DshSelectionBarButton("Export", primary = true) { onExport() }
+        DshSelectionBarButton("Cancel", primary = false) { onCancel() }
+    }
+}
+
+private fun ViewContainer<*, *>.DshSelectionBarButton(
+    label: String,
+    primary: Boolean,
+    onClick: () -> Unit,
+) {
+    View {
+        attr {
+            height(38f)
+            marginLeft(6f)
+            marginRight(6f)
+            paddingLeft(18f)
+            paddingRight(18f)
+            allCenter()
+            borderRadius(10f)
+            backgroundColor(if (primary) theme.accentFill else theme.surfaceSunken)
+        }
+        Text {
+            attr {
+                text(label)
+                fontSize(14f)
+                fontWeightMedium()
+                color(if (primary) theme.textOnAccent else theme.textSecondary)
+            }
+        }
+        event { click { onClick() } }
+    }
+}
+
+/** Task 1 appearance picker. New UI copy is English. */
+internal fun ViewContainer<*, *>.DshAppearanceModal(
+    themeMode: () -> DshThemeMode,
+    codeTheme: () -> DshCodeTheme,
+    onSelectTheme: (DshThemeMode) -> Unit,
+    onSelectCodeTheme: (DshCodeTheme) -> Unit,
+    onClose: () -> Unit,
+) {
+    Modal(inWindow = true) {
+        attr { absolutePositionAllZero(); allCenter(); backgroundColor(theme.mask); padding(20f) }
+        View {
+            attr {
+                width(pagerData.pageViewWidth - 40f)
+                maxWidth(440f)
+                flexDirectionColumn()
+                padding(22f)
+                borderRadius(16f)
+                backgroundColor(theme.surface)
+            }
+            View {
+                attr { height(32f); flexDirectionRow(); alignItemsCenter() }
+                Text { attr { text("Appearance"); flex(1f); fontSize(20f); fontWeightBold(); color(theme.textPrimary) } }
+                View {
+                    attr { size(32f, 32f); allCenter() }
+                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f); tintColor(theme.textSecondary) } }
+                    DshHitButton { onClose() }
+                }
+            }
+            Text { attr { text("Theme"); marginTop(16f); fontSize(12f); fontWeightMedium(); color(theme.textSecondary) } }
+            DshAppearanceOption(
+                "Light", "Always use the light palette",
+                { themeMode() == DshThemeMode.LIGHT },
+            ) { onSelectTheme(DshThemeMode.LIGHT) }
+            DshAppearanceOption(
+                "Dark", "Always use the dark palette",
+                { themeMode() == DshThemeMode.DARK },
+            ) { onSelectTheme(DshThemeMode.DARK) }
+            DshAppearanceOption(
+                "System", "Follow the device light / dark setting",
+                { themeMode() == DshThemeMode.SYSTEM },
+            ) { onSelectTheme(DshThemeMode.SYSTEM) }
+            DshAppearanceOption(
+                "Sunrise to sunset", "Dark after dusk, estimated from your time zone",
+                { themeMode() == DshThemeMode.SOLAR },
+            ) { onSelectTheme(DshThemeMode.SOLAR) }
+            DshAppearanceOption(
+                "High contrast", "Accessible dark palette with stronger contrast",
+                { themeMode() == DshThemeMode.HIGH_CONTRAST },
+            ) { onSelectTheme(DshThemeMode.HIGH_CONTRAST) }
+            Text {
+                attr {
+                    text("Daylight is estimated from the device clock and time zone. The app never asks for your location, so the switch can be off by up to an hour.")
+                    marginTop(10f); fontSize(12f); lineHeight(18f); color(theme.textMuted)
+                }
+            }
+            Text { attr { text("Tool output"); marginTop(18f); fontSize(12f); fontWeightMedium(); color(theme.textSecondary) } }
+            View {
+                attr {
+                    height(42f); marginTop(8f); flexDirectionRow()
+                    borderRadius(8f); backgroundColor(theme.surfaceSunken); padding(4f)
+                }
+                DshAppearanceSegment("Auto", { codeTheme() == DshCodeTheme.AUTO }) { onSelectCodeTheme(DshCodeTheme.AUTO) }
+                DshAppearanceSegment("Light", { codeTheme() == DshCodeTheme.LIGHT }) { onSelectCodeTheme(DshCodeTheme.LIGHT) }
+                DshAppearanceSegment("Dark", { codeTheme() == DshCodeTheme.DARK }) { onSelectCodeTheme(DshCodeTheme.DARK) }
+            }
+            Text {
+                attr {
+                    text(
+                        "Terminal output, diffs and JSON listings can keep their own theme. " +
+                            "Markdown code blocks follow the app theme.",
+                    )
+                    marginTop(10f); fontSize(12f); lineHeight(18f); color(theme.textMuted)
+                }
+            }
+        }
+    }
+}
+
+private fun ViewContainer<*, *>.DshAppearanceOption(
+    title: String,
+    subtitle: String,
+    selected: () -> Boolean,
+    onSelect: () -> Unit,
+) {
+    View {
+        attr {
+            marginTop(8f)
+            flexDirectionRow()
+            alignItemsCenter()
+            padding(10f, 12f, 10f, 12f)
+            borderRadius(12f)
+            backgroundColor(if (selected()) theme.accentSoft else theme.surfaceRaised)
+            border(Border(1f, BorderStyle.SOLID, if (selected()) theme.accentBorder else theme.border))
+        }
+        View {
+            attr {
+                size(18f, 18f)
+                borderRadius(9f)
+                border(Border(1.5f, BorderStyle.SOLID, if (selected()) theme.accent else theme.textDisabled))
+                backgroundColor(if (selected()) theme.accent else Color(0x00FFFFFF))
+                allCenter()
+            }
+            View {
+                attr {
+                    size(if (selected()) 6f else 0f, if (selected()) 6f else 0f)
+                    borderRadius(3f)
+                    backgroundColor(theme.textOnAccent)
+                }
+            }
+        }
+        View {
+            attr { flex(1f); marginLeft(10f); flexDirectionColumn() }
+            Text { attr { text(title); fontSize(14f); fontWeightMedium(); color(theme.textPrimary) } }
+            Text { attr { text(subtitle); marginTop(2f); fontSize(11f); lineHeight(15f); color(theme.textMuted) } }
+        }
+        event { click { onSelect() } }
+    }
+}
+
+private fun ViewContainer<*, *>.DshAppearanceSegment(
+    label: String,
+    selected: () -> Boolean,
+    onSelect: () -> Unit,
+) {
+    View {
+        attr {
+            flex(1f); height(34f); allCenter(); borderRadius(6f)
+            backgroundColor(if (selected()) theme.surface else Color(0x00FFFFFF))
+        }
+        Text { attr { text(label); fontSize(13f); color(if (selected()) theme.accent else theme.textSecondary) } }
+        event { click { onSelect() } }
     }
 }
 
@@ -273,6 +987,7 @@ internal fun ViewContainer<*, *>.DshWordmark(height: Float = 22f) {
             width(height * DSH_WORDMARK_RATIO)
             height(height)
             resizeContain()
+            tintColor(theme.textPrimary)
         }
     }
 }
@@ -285,6 +1000,12 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
     animated: () -> Boolean,
     onClose: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAppearance: () -> Unit,
+    onOpenPlugins: () -> Unit,
+    onOpenLogs: () -> Unit,
+    archivedCount: () -> Int,
+    onOpenArchive: () -> Unit,
+    onSessionMenu: (String) -> Unit,
     onNewSession: () -> Unit,
     onSelect: (String) -> Unit,
 ) {
@@ -303,7 +1024,7 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
                 paddingLeft(14f)
                 paddingRight(14f)
                 paddingBottom(18f)
-                backgroundColor(Color(0xFFF9FAFB))
+                backgroundColor(theme.surfaceRaised)
                 transform(Translate(if (animated()) 0f else -1f, 0f))
                 animation(Animation.easeOut(0.24f), animated())
             }
@@ -317,7 +1038,7 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
                 View { attr { flex(1f) } }
                 View {
                     attr { size(38f, 38f); allCenter() }
-                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(22f, 22f) } }
+                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(22f, 22f); tintColor(theme.textSecondary) } }
                     event { click { onClose() } }
                 }
             }
@@ -330,16 +1051,16 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
                     paddingLeft(12f)
                     paddingRight(12f)
                     borderRadius(9f)
-                    backgroundColor(Color(0xFFF1F3F5))
+                    backgroundColor(theme.surfaceSunken)
                 }
-                Image { attr { src(ImageUri.commonAssets("plus.svg")); size(20f, 20f) } }
+                Image { attr { src(ImageUri.commonAssets("plus.svg")); size(20f, 20f); tintColor(theme.textPrimary) } }
                 Text {
                     attr {
                         text("新会话")
                         marginLeft(10f)
                         fontSize(14f)
                         fontWeightMedium()
-                        color(Color(0xFF32373C))
+                        color(theme.textPrimary)
                     }
                 }
                 event { click { onNewSession() } }
@@ -355,17 +1076,141 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
                     borderRadius(9f)
                     backgroundColor(Color(0x00000000))
                 }
-                Image { attr { src(ImageUri.commonAssets("sliders.svg")); size(20f, 20f) } }
+                Image { attr { src(ImageUri.commonAssets("sliders.svg")); size(20f, 20f); tintColor(theme.textSecondary) } }
                 Text {
                     attr {
                         text("设置")
                         marginLeft(10f)
                         fontSize(14f)
                         fontWeightMedium()
-                        color(Color(0xFF555D64))
+                        color(theme.textSecondary)
                     }
                 }
                 event { click { onOpenSettings() } }
+            }
+            View {
+                attr {
+                    height(42f)
+                    marginTop(4f)
+                    flexDirectionRow()
+                    alignItemsCenter()
+                    paddingLeft(12f)
+                    paddingRight(12f)
+                    borderRadius(9f)
+                    backgroundColor(Color(0x00000000))
+                }
+                Image { attr { src(ImageUri.commonAssets("appearance.svg")); size(20f, 20f); tintColor(theme.textSecondary) } }
+                Text {
+                    attr {
+                        text("Appearance")
+                        marginLeft(10f)
+                        fontSize(14f)
+                        fontWeightMedium()
+                        color(theme.textSecondary)
+                    }
+                }
+                event { click { onOpenAppearance() } }
+            }
+            vif({ isWebTimeline() }) {
+                View {
+                    attr {
+                        height(42f)
+                        marginTop(4f)
+                        flexDirectionRow()
+                        alignItemsCenter()
+                        paddingLeft(12f)
+                        paddingRight(12f)
+                        borderRadius(9f)
+                        backgroundColor(Color(0x00000000))
+                    }
+                    Image {
+                        attr {
+                            src(ImageUri.commonAssets("plugin.svg"))
+                            size(20f, 20f)
+                            tintColor(theme.textSecondary)
+                        }
+                    }
+                    Text {
+                        attr {
+                            text("Plugins")
+                            flex(1f)
+                            marginLeft(10f)
+                            fontSize(14f)
+                            fontWeightMedium()
+                            color(theme.textSecondary)
+                        }
+                    }
+                    event { click { onOpenPlugins() } }
+                }
+            }
+            View {
+                attr {
+                    height(42f)
+                    marginTop(4f)
+                    flexDirectionRow()
+                    alignItemsCenter()
+                    paddingLeft(12f)
+                    paddingRight(12f)
+                    borderRadius(9f)
+                    backgroundColor(Color(0x00000000))
+                }
+                Image {
+                    attr {
+                        src(ImageUri.commonAssets("logs.svg"))
+                        size(20f, 20f)
+                        tintColor(theme.textSecondary)
+                    }
+                }
+                Text {
+                    attr {
+                        text("Logs")
+                        flex(1f)
+                        marginLeft(10f)
+                        fontSize(14f)
+                        fontWeightMedium()
+                        color(theme.textSecondary)
+                    }
+                }
+                event { click { onOpenLogs() } }
+            }
+            vif({ isWebTimeline() }) {
+                View {
+                    attr {
+                        height(42f)
+                        marginTop(4f)
+                        flexDirectionRow()
+                        alignItemsCenter()
+                        paddingLeft(12f)
+                        paddingRight(12f)
+                        borderRadius(9f)
+                        backgroundColor(Color(0x00000000))
+                    }
+                    Image {
+                        attr {
+                            src(ImageUri.commonAssets("archive.svg"))
+                            size(20f, 20f)
+                            tintColor(theme.textSecondary)
+                        }
+                    }
+                    Text {
+                        attr {
+                            text("Archived")
+                            flex(1f)
+                            marginLeft(10f)
+                            fontSize(14f)
+                            fontWeightMedium()
+                            color(theme.textSecondary)
+                        }
+                    }
+                    Text {
+                        attr {
+                            text(archivedCount().toString())
+                            fontSize(12f)
+                            color(theme.textMuted)
+                        }
+                    }
+                    event { click { onOpenArchive() } }
+                }
             }
             Text {
                 attr {
@@ -373,7 +1218,7 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
                     marginTop(20f)
                     marginBottom(8f)
                     fontSize(12f)
-                    color(Color(0xFF8B9298))
+                    color(theme.textMuted)
                 }
             }
             Scroller {
@@ -403,7 +1248,7 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
                                     lines(1)
                                     fontSize(12f)
                                     fontWeightMedium()
-                                    color(Color(0xFF7A838A))
+                                    color(theme.textMuted)
                                 }
                             }
                             group.sessions.forEach { session ->
@@ -413,6 +1258,7 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
                                     active = activeId() == session.id,
                                     running = session.running,
                                     onSelect = { onSelect(session.id) },
+                                    onMenu = { onSessionMenu(session.id) },
                                 )
                             }
                         }
@@ -436,6 +1282,7 @@ internal fun ViewContainer<*, *>.DshSessionDrawerRow(
     active: Boolean,
     running: Boolean,
     onSelect: () -> Unit,
+    onMenu: (() -> Unit)? = null,
 ) {
     View {
         attr {
@@ -444,15 +1291,15 @@ internal fun ViewContainer<*, *>.DshSessionDrawerRow(
             flexDirectionRow()
             alignItemsCenter()
             paddingLeft(12f)
-            paddingRight(10f)
+            paddingRight(if (onMenu == null) 10f else 2f)
             borderRadius(9f)
-            backgroundColor(Color(if (active) 0xFFE3E6EA else 0x00FFFFFF))
+            backgroundColor(if (active) theme.rowSelected else Color(0x00FFFFFF))
         }
         View {
             attr {
                 size(7f, 7f)
                 borderRadius(4f)
-                backgroundColor(Color(if (running) 0xFF4176E6 else 0xFFADB2B8))
+                backgroundColor(if (running) theme.accent else theme.textDisabled)
             }
         }
         View {
@@ -467,7 +1314,7 @@ internal fun ViewContainer<*, *>.DshSessionDrawerRow(
                     text(title)
                     lines(1)
                     fontSize(14f)
-                    color(Color(0xFF2B3136))
+                    color(theme.textPrimary)
                 }
             }
             Text {
@@ -476,11 +1323,27 @@ internal fun ViewContainer<*, *>.DshSessionDrawerRow(
                     lines(1)
                     marginTop(2f)
                     fontSize(10f)
-                    color(Color(0xFF969DA3))
+                    color(theme.textMuted)
                 }
             }
         }
         event { click { onSelect() } }
+        // A child with its own click wins the hit test for its own area, so the row's
+        // select handler is not reached through the menu button.
+        if (onMenu != null) {
+            View {
+                attr { size(40f, 44f); allCenter() }
+                Text {
+                    attr {
+                        text("···")
+                        fontSize(17f)
+                        fontWeightBold()
+                        color(theme.textMuted)
+                    }
+                }
+                event { click { onMenu() } }
+            }
+        }
     }
 }
 
@@ -496,7 +1359,7 @@ internal fun ViewContainer<*, *>.DshModelPicker(
             absolutePositionAllZero()
             flexDirectionColumn()
             justifyContentFlexEnd()
-            backgroundColor(Color(0x55000000))
+            backgroundColor(theme.maskLight)
         }
         View {
             attr { flex(1f) }
@@ -508,7 +1371,7 @@ internal fun ViewContainer<*, *>.DshModelPicker(
                 flexDirectionColumn()
                 padding(18f)
                 borderRadius(20f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(theme.surface)
             }
             View {
                 attr { height(40f); flexDirectionRow(); alignItemsCenter() }
@@ -517,13 +1380,13 @@ internal fun ViewContainer<*, *>.DshModelPicker(
                         text("选择模型")
                         fontSize(18f)
                         fontWeightBold()
-                        color(Color(0xFF252B30))
+                        color(theme.textPrimary)
                     }
                 }
                 View { attr { flex(1f) } }
                 View {
                     attr { size(36f, 36f); allCenter() }
-                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(21f, 21f) } }
+                    Image { attr { src(ImageUri.commonAssets("x.svg")); size(21f, 21f); tintColor(theme.textSecondary) } }
                     event { click { onClose() } }
                 }
             }
@@ -534,7 +1397,7 @@ internal fun ViewContainer<*, *>.DshModelPicker(
                         marginTop(6f)
                         marginBottom(6f)
                         fontSize(12f)
-                        color(Color(0xFFBF3535))
+                        color(theme.danger)
                     }
                 }
             }
@@ -544,7 +1407,7 @@ internal fun ViewContainer<*, *>.DshModelPicker(
                         text("正在加载模型...")
                         marginTop(24f)
                         fontSize(14f)
-                        color(Color(0xFF7D858C))
+                        color(theme.textMuted)
                     }
                 }
             }
@@ -559,7 +1422,7 @@ internal fun ViewContainer<*, *>.DshModelPicker(
                             alignItemsCenter()
                             padding(10f, 12f, 10f, 12f)
                             borderRadius(10f)
-                            backgroundColor(Color(if (option.selected) 0xFFF0F3FA else 0xFFF8F8F9))
+                            backgroundColor(if (option.selected) theme.accentSoft else theme.surfaceRaised)
                         }
                         View {
                             attr { flex(1f); flexDirectionColumn() }
@@ -568,7 +1431,7 @@ internal fun ViewContainer<*, *>.DshModelPicker(
                                     text(option.name)
                                     fontSize(14f)
                                     fontWeightMedium()
-                                    color(Color(0xFF2C3237))
+                                    color(theme.textPrimary)
                                 }
                             }
                             Text {
@@ -577,12 +1440,12 @@ internal fun ViewContainer<*, *>.DshModelPicker(
                                     marginTop(3f)
                                     lines(1)
                                     fontSize(11f)
-                                    color(Color(0xFF8B939A))
+                                    color(theme.textMuted)
                                 }
                             }
                         }
                         if (option.selected) {
-                            Text { attr { text("✓"); fontSize(17f); color(Color(0xFF4176E6)) } }
+                            Text { attr { text("✓"); fontSize(17f); color(theme.accent) } }
                         }
                         event { click { if (!busy()) onSelect(option) } }
                     }
@@ -603,8 +1466,8 @@ internal fun ViewContainer<*, *>.DshTopBar(
             alignItemsCenter()
             paddingLeft(12f)
             paddingRight(14f)
-            backgroundColor(Color.WHITE)
-            borderBottom(Border(1f, BorderStyle.SOLID, Color(0xFFEBEEF2)))
+            backgroundColor(theme.surface)
+            borderBottom(Border(1f, BorderStyle.SOLID, theme.divider))
         }
         View {
             attr { size(38f, 38f); allCenter() }
@@ -612,6 +1475,7 @@ internal fun ViewContainer<*, *>.DshTopBar(
                 attr {
                     src(ImageUri.commonAssets("menu.svg"))
                     size(26f, 26f)
+                    tintColor(theme.textPrimary)
                 }
             }
         }
@@ -622,7 +1486,7 @@ internal fun ViewContainer<*, *>.DshTopBar(
                 flex(1f)
                 fontSize(17f)
                 fontWeightMedium()
-                color(Color(0xFF0F1115))
+                color(theme.textPrimary)
                 lines(1)
             }
         }
@@ -634,7 +1498,7 @@ internal fun ViewContainer<*, *>.DshTopBar(
                 paddingLeft(8f)
                 paddingRight(8f)
                 borderRadius(11f)
-                backgroundColor(Color(if (ready) 0xFFE8F7EE else 0xFFF3F5F7))
+                backgroundColor(if (ready) theme.successSoft else theme.surfaceSunken)
                 justifyContentCenter()
                 alignItemsCenter()
             }
@@ -644,7 +1508,7 @@ internal fun ViewContainer<*, *>.DshTopBar(
                     text(if (ready) "已连接" else topBarConnectingText(connection()))
                     fontSize(11f)
                     lines(1)
-                    color(Color(if (ready) 0xFF1F8A4C else 0xFF6B7785))
+                    color(if (ready) theme.success else theme.textMuted)
                 }
             }
         }
@@ -666,14 +1530,14 @@ internal fun ViewContainer<*, *>.DshSessionRail(
                 width(236f)
                 flexDirectionColumn()
             }
-            backgroundColor(Color(0xFFF7F7F8))
+            backgroundColor(theme.surfaceRaised)
             padding(14f)
         }
         Text {
             attr {
                 text("会话")
                 fontSize(13f)
-                color(Color(0xFF6F7378))
+                color(theme.textMuted)
                 marginBottom(9f)
             }
         }
@@ -709,10 +1573,10 @@ internal fun ViewContainer<*, *>.DshSessionButton(
             width(if (active) 220f else 220f)
             marginBottom(4f)
             borderRadius(7f)
-            backgroundColor(Color(if (active) 0xFFE4EDFD else 0x00000000))
+            backgroundColor(if (active) theme.accentSoft else Color(0x00000000))
             titleAttr {
                 text(session.title)
-                color(Color(if (active) 0xFF4176E6 else 0xFF3E4247))
+                color(if (active) theme.accent else theme.textSecondary)
                 fontSize(13f)
             }
         }
@@ -735,14 +1599,14 @@ internal fun ViewContainer<*, *>.DshSessionDetailsPanel(
             height(pagerData.pageViewHeight)
             flexDirectionColumn()
             padding(16f)
-            backgroundColor(Color(0xFFF7F9FA))
-            border(Border(1f, BorderStyle.SOLID, Color(0xFFE5E8EB)))
+            backgroundColor(theme.background)
+            border(Border(1f, BorderStyle.SOLID, theme.border))
         }
         Text {
             attr {
                 text("Session")
                 fontSize(12f)
-                color(Color(0xFF7A8790))
+                color(theme.textMuted)
             }
         }
         Text {
@@ -751,7 +1615,7 @@ internal fun ViewContainer<*, *>.DshSessionDetailsPanel(
                 marginTop(6f)
                 fontSize(17f)
                 fontWeightSemiBold()
-                color(Color(0xFF1F2933))
+                color(theme.textPrimary)
                 lines(2)
             }
         }
@@ -759,7 +1623,7 @@ internal fun ViewContainer<*, *>.DshSessionDetailsPanel(
             attr {
                 height(1f)
                 marginTop(14f)
-                backgroundColor(Color(0xFFE5E8EB))
+                backgroundColor(theme.divider)
             }
         }
         DshDetailRow("状态", if (running()) "运行中" else "空闲")
@@ -790,7 +1654,7 @@ internal fun ViewContainer<*, *>.DshDetailRow(
             attr {
                 text(label)
                 fontSize(11f)
-                color(Color(0xFF8B9298))
+                color(theme.textMuted)
             }
         }
         Text {
@@ -798,7 +1662,7 @@ internal fun ViewContainer<*, *>.DshDetailRow(
                 text(value)
                 marginTop(2f)
                 fontSize(13f)
-                color(Color(0xFF343E47))
+                color(theme.textSecondary)
                 lines(2)
             }
         }
@@ -824,7 +1688,7 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
             allCenter()
             paddingLeft(20f)
             paddingRight(20f)
-            backgroundColor(Color(0x66000000))
+            backgroundColor(theme.mask)
         }
         View {
             attr {
@@ -834,7 +1698,7 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                 flexDirectionColumn()
                 padding(18f)
                 borderRadius(16f)
-                backgroundColor(Color.WHITE)
+                backgroundColor(theme.surface)
             }
             View {
                 attr { height(36f); flexDirectionRow(); alignItemsCenter() }
@@ -845,17 +1709,17 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                         lines(1)
                         fontSize(17f)
                         fontWeightBold()
-                        color(Color(0xFF1F2933))
+                        color(theme.textPrimary)
                     }
                 }
-                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f) } }; DshHitButton { onClose() } }
+                View { attr { size(32f, 32f); allCenter() }; Image { attr { src(ImageUri.commonAssets("x.svg")); size(20f, 20f); tintColor(theme.textSecondary) } }; DshHitButton { onClose() } }
             }
             Scroller {
                 attr {
                     flex(1f)
                     marginTop(12f)
                     borderRadius(8f)
-                    backgroundColor(Color(0xFFF7F9FA))
+                    backgroundColor(theme.surfaceRaised)
                 }
                 vfor({ entries() }) { entry ->
                     View {
@@ -872,7 +1736,7 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                                 flex(1f)
                                 lines(1)
                                 fontSize(14f)
-                                color(Color(0xFF343E47))
+                                color(theme.textSecondary)
                             }
                         }
                         event { click { if (!busy()) onDirectorySelect(entry.path) } }
@@ -880,7 +1744,7 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                 }
             }
             vif({ error().isNotEmpty() }) {
-                Text { attr { text(error()); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
+                Text { attr { text(error()); marginTop(8f); fontSize(12f); color(theme.danger) } }
             }
             Input {
                 attr {
@@ -888,7 +1752,7 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                     marginTop(10f)
                     fontSize(14f)
                     placeholder("新目录名称")
-                    placeholderColor(Color(0xFF98A1A9))
+                    placeholderColor(theme.placeholder)
                 }
                 event { textDidChange { onNewNameChange(it.text) } }
             }
@@ -901,7 +1765,7 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                         height(38f)
                         textAlignCenter()
                         fontSize(13f)
-                        color(Color(0xFF7A838A))
+                        color(theme.textMuted)
                     }
                     event { click { if (!busy()) onCreateDirectory() } }
                 }
@@ -913,7 +1777,7 @@ internal fun ViewContainer<*, *>.DshWorkspaceBrowserModal(
                         marginLeft(8f)
                         textAlignCenter()
                         fontSize(13f)
-                        color(Color(0xFF4176E6))
+                        color(theme.accent)
                     }
                     event { click { if (!busy()) onAdopt() } }
                 }

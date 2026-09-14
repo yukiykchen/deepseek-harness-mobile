@@ -190,7 +190,12 @@ final class DshRelayLoopbackServer {
                         if name.lowercased() == "content-length" || name.lowercased() == "transfer-encoding" {
                             continue
                         }
-                        writeRaw(fd, "\(name): \(value)\r\n")
+                        // Node serializes multi-value headers (Set-Cookie) as arrays; emit one line each.
+                        if let values = value as? [Any] {
+                            for item in values { writeRaw(fd, "\(name): \(item)\r\n") }
+                        } else {
+                            writeRaw(fd, "\(name): \(value)\r\n")
+                        }
                     }
                 }
                 writeRaw(fd, "\r\n")

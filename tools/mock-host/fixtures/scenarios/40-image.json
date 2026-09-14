@@ -1,0 +1,10 @@
+{
+  "id": "image",
+  "match": ["image", "photo", "picture", "图片"],
+  "description": "Echoes the images the user attached (or the fixture sample) back as an assistant image block, so thumbnails and session/attachment reads are exercised.",
+  "steps": [
+    { "kind": "text", "text": "I received your attachment. Here it is again, referenced through its durable attachment id:", "chunk": 14, "delayMs": 25 },
+    { "kind": "image", "text": "Echoed image", "delayMs": 300 },
+    { "kind": "text", "text": "The image was stored by the Host; only an `ImageAttachmentRef` lives in the conversation log.", "chunk": 14, "delayMs": 25 }
+  ]
+}

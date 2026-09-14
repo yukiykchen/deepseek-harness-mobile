@@ -1,0 +1,4 @@
+# The repository root ignores *.js for the Kotlin/JS build output; this plugin is
+# plain Node ESM and its sources must be committed.
+!*.js
+node_modules/

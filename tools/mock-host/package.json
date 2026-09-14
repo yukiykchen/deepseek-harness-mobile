@@ -1,0 +1,20 @@
+{
+  "name": "dsh-mock-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Replay-driven mock of the DeepSeek Harness 0.1.5 Host protocol (/api unary + /api/remote.mux streams) for the DSH mobile app",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "bin": {
+    "dsh-mock-host": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

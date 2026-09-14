@@ -1,0 +1,13 @@
+{
+  "id": "latex",
+  "match": ["latex", "math", "formula", "公式"],
+  "description": "Inline and block formulas, one formula deliberately split across chunks, an unclosed formula that must fall back to plain text.",
+  "steps": [
+    {
+      "kind": "text",
+      "chunk": 7,
+      "delayMs": 40,
+      "text": "Mass–energy equivalence is $E = mc^2$, and Euler's identity is $e^{i\\pi} + 1 = 0$.\n\nThe Pythagorean theorem as a block formula:\n\n$$x^2 + y^2 = z^2$$\n\nA fraction with Greek letters and subscripts:\n\n$$\\alpha_1 = \\frac{\\beta_2 + \\gamma_3}{\\sqrt{\\delta}} \\cdot \\sum_{i=1}^{n} x_i$$\n\nA 2×2 matrix:\n\n$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$\n\nAn unclosed formula stays readable as text: $a + b = c\n\nAnd inline `code with $dollar$ signs` must not become a formula."
+    }
+  ]
+}

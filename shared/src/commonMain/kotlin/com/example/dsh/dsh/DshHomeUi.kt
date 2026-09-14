@@ -50,5 +50,14 @@ internal fun topBarConnectingText(label: String): String {
 }
 
 internal const val COMPOSER_HEIGHT = 142f
+
+/** Extra composer height while images are staged for the next turn. */
+internal const val ATTACHMENT_STRIP_HEIGHT = 88f
+
+/** Extra composer height while the image-source menu is open. */
+internal const val ATTACHMENT_MENU_HEIGHT = 78f
+
+/** Extra composer height while a staged image carries a rejection message. */
+internal const val ATTACHMENT_ERROR_HEIGHT = 20f
 internal const val CHAT_INITIAL_RENDER_COUNT = 48
 internal const val CHAT_MAX_RENDERED_MESSAGES = 128

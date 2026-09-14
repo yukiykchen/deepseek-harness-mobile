@@ -1,5 +1,7 @@
 package com.example.dsh.dsh
 
+import com.tencent.kuikly.core.base.Border
+import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.ComposeAttr
 import com.tencent.kuikly.core.base.ComposeEvent
 import com.tencent.kuikly.core.base.ComposeView
@@ -10,6 +12,7 @@ import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.reactive.ReactiveObserver
 import com.tencent.kuikly.core.reactive.handler.*
 import com.tencent.kuikly.core.timer.setTimeout
+import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuiklybase.KuiklyStreamingMarkdown
 import com.tencent.kuiklybase.config.FontWeight
@@ -33,6 +36,8 @@ internal class DshMarkdownView : ComposeView<DshMarkdownAttr, ComposeEvent>() {
     private var pendingContent = ""
     private var pendingStreaming = false
     private var flushScheduled = false
+    private var lastDarkMode: Boolean? = null
+    private val paletteObserver = Any()
 
     override fun createAttr(): DshMarkdownAttr = DshMarkdownAttr()
 
@@ -64,11 +69,21 @@ internal class DshMarkdownView : ComposeView<DshMarkdownAttr, ComposeEvent>() {
                                 val live = block.blockIndex == ctx.blockCount - 1
                                 if (live) ctx.liveKey else block.id
                             }) {
-                                KuiklyStreamingMarkdown(
-                                    state = ctx.streamingState,
-                                    block = block,
-                                    config = ctx.markdownConfig(),
-                                )
+                                // KuiklyStreamingMarkdown paints a block as one opaque
+                                // unit, so a standalone `$$...$$` gets a DSH-owned view
+                                // instead — which is also what "laid out independently"
+                                // asks for. Inline formulas are substituted before the
+                                // parser runs, in flushBlocksUpdate.
+                                val formula = DshLatex.blockFormula(block.blockContent)
+                                if (formula == null) {
+                                    KuiklyStreamingMarkdown(
+                                        state = ctx.streamingState,
+                                        block = block,
+                                        config = ctx.markdownConfig(),
+                                    )
+                                } else {
+                                    DshLatexBlock(formula, ctx.attr.contentWidth)
+                                }
                             }
                         }
                     }
@@ -87,9 +102,21 @@ internal class DshMarkdownView : ComposeView<DshMarkdownAttr, ComposeEvent>() {
                 scheduleBlocksUpdate(content, streaming)
             }
         }
+        // markdownConfig() is read inside the vbind creator, which is not reactive.
+        // Remount the block tree when the palette flips so the new config is applied.
+        ReactiveObserver.bindValueChange(paletteObserver) {
+            val dark = attr.darkMode
+            ReactiveObserver.addLazyTaskUtilEndCollectDependency {
+                if (lastDarkMode != dark) {
+                    lastDarkMode = dark
+                    treeEpoch += 1
+                }
+            }
+        }
     }
 
     override fun viewWillUnload() {
+        ReactiveObserver.unbindValueChange(paletteObserver)
         ReactiveObserver.unbindValueChange(this)
         super.viewWillUnload()
     }
@@ -144,7 +171,7 @@ internal class DshMarkdownView : ComposeView<DshMarkdownAttr, ComposeEvent>() {
         lastStreaming = streaming
         val input = if (content.isEmpty() && streaming) DshStreamingMarkdown.PLACEHOLDER else content
         val toParse = if (streaming) DshStreamingMarkdown.closeOpenFence(input) else input
-        val next = streamingState.update(toParse, force = !streaming)
+        val next = streamingState.update(DshLatex.substituteInline(toParse), force = !streaming)
         if (next == null) {
             DshStreamLog.i("render.skip parser-null streaming=$streaming chars=${content.length}")
             return
@@ -181,6 +208,10 @@ internal class DshMarkdownView : ComposeView<DshMarkdownAttr, ComposeEvent>() {
                 blockQuoteBar = if (dark) 0xFF858990 else 0xFFA2A4A8,
                 blockQuoteBackground = if (dark) 0xFF242528 else 0xFFF5F6F7,
                 linkColor = if (dark) 0xFF78A4F8 else 0xFF4176E6,
+                // KuiklyMarkdown 1.0.6 paints inline code spans with this same colour and
+                // drops their background chip, so it has to contrast with the message
+                // surface. Fenced blocks therefore cannot run a theme of their own here;
+                // the independent code theme covers the DSH tool listings instead.
                 codeText = text,
             ),
             typography = MarkdownTypography(
@@ -224,6 +255,39 @@ internal class DshMarkdownView : ComposeView<DshMarkdownAttr, ComposeEvent>() {
                 blockQuoteTextVertical = 8f,
             ),
         )
+    }
+}
+
+/**
+ * A standalone `$$...$$` formula on its own row. Rows come from [DshLatex.renderLines],
+ * which yields one line for an expression and one per row for a matrix; a formula the
+ * converter cannot render shows its LaTeX source instead of failing.
+ */
+internal fun ViewContainer<*, *>.DshLatexBlock(source: String, contentWidth: Float) {
+    val rendered = DshLatex.renderLines(source)
+    View {
+        attr {
+            flexDirectionColumn()
+            alignItemsCenter()
+            if (contentWidth > 0f) width(contentWidth)
+            marginTop(6f)
+            marginBottom(6f)
+            paddingTop(12f)
+            paddingBottom(12f)
+            borderRadius(8f)
+            backgroundColor(theme.codeBackground)
+            border(Border(1f, BorderStyle.SOLID, theme.border))
+        }
+        Text {
+            attr {
+                text(rendered.lines.joinToString("\n"))
+                fontSize(if (rendered.fallback) 13f else 16f)
+                lineHeight(if (rendered.fallback) 19f else 26f)
+                fontFamily("monospace")
+                color(if (rendered.fallback) theme.codeTextMuted else theme.codeText)
+                textAlignCenter()
+            }
+        }
     }
 }
 

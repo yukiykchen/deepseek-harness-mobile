@@ -1,237 +1,230 @@
-# App 与 Host 协议
+# App ↔ Host protocol (DSH 0.1.5)
 
-这份文档记录 **DSH App 实际调用的 Host 协议**，方便对照代码和官方 Harness API。权威实现在 `shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHostProtocol.kt`。方法名与官方 `packages/host/apiproxy` 对齐，App **不自定 JSON-RPC 方法**。
+This document records the Host protocol the DSH App actually speaks. The authoritative implementation is
+`shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHostRuntime.kt` (transport) and
+`DshRemoteHostRepository.kt` (reducers). Endpoint names and argument names are taken verbatim from the
+generated Typert descriptors shipped in `@deepseek-ai/dsh-*@0.1.5-rc.1`; the App defines no Host methods of its own.
 
-扫码 Relay 的配对、密封隧道不属于 Host 协议，见 [dsh-scan-remote](https://github.com/yukiykchen/dsh-scan-remote)。配对成功后，App 只对 **本机 loopback 上的 Host** 说话，信封与 SSH 相同。
+The pre-0.1.2 "apiproxy" protocol (`/api/events.mux`, `/api/events.host`, `host.describe`, `session.prompt`,
+`POST /api/respond`) is gone from the Host and from this App.
 
-手机内嵌 Harness（本地模式）已独立为 **DSH Local** 工程，协议信封仍与下表一致，但不在本仓库打包。
+Scan-relay pairing and the sealed tunnel are not part of the Host protocol; see
+[dsh-scan-remote](https://github.com/yukiykchen/dsh-scan-remote). After pairing the App only talks to the Host on
+the phone's loopback gateway; the envelope is identical for SSH and direct connections.
 
-## 1. 连接方式与信封
+## 1. Transports and authentication
 
-| 模式 | `baseUrl` | 鉴权 | 下行事件 | 实现 |
+| Mode | `baseUrl` | Gateway auth | Host auth | Launch-token source |
 | --- | --- | --- | --- | --- |
-| 扫码（本 App） | 本机网关（Relay 转到电脑 `:3080`） | `Authorization: Bearer <token>` | WebSocket：`/api/events.mux` + `/api/events.host` | `DshRemoteHostRepository` |
-| SSH（本 App） | `http://127.0.0.1:<转发端口>` | 同扫码，token 可空 | 同扫码 WebSocket | `DshRemoteHostRepository` |
-| 手机本地（DSH Local） | `http://127.0.0.1:3080` | 内嵌 Host，通常无 Bearer | SSE：`GET /api/events.mux` | `DshLegacyHostRepository` |
+| Scan (relay) | phone loopback gateway → tunnel → `127.0.0.1:3080` | `Authorization: Bearer <local token>` (stripped by the gateway) | browser-session cookie | `GET /dsh-scan-remote/api/auth` through the tunnel (patched plugin) |
+| SSH | `http://127.0.0.1:<forwarded port>` | none | browser-session cookie | pasted from the `dsh web` banner, stored in the SSH profile |
+| Direct (dev) | any `http(s)://host:port` the phone can open | none | browser-session cookie | plugin route if present (mock Host), else pasted |
 
-上行 RPC 三种模式都是：
+### Browser-session cookie
+
+DSH ≥ 0.1.2 rejects every `/api` request and the `/api/remote.mux` upgrade without a cookie, loopback included:
+
+1. `GET {baseUrl}/?token={launch token}` — must be sent with redirects **disabled** (native `mintAuthCookie`
+   bridge); the Host answers `303 Location: /` with `Set-Cookie: dsh-auth-<sha256(authority)>=v1.<body>.<sig>; Max-Age=30d; HttpOnly`.
+2. The `name=value` pair is sent as the `Cookie` header on every RPC (Kuikly `NetworkModule.httpRequest(cookie=)`) and on
+   the WebSocket upgrade (`DshWebSocketModule.connect(cookie=)`).
+3. The cookie is bound to the `Host` authority the Host sees (`127.0.0.1:3080` behind the relay plugin, the forwarded
+   port for SSH). It is persisted per connection scope in `dsh_settings` (`auth_cookie:<scope>`).
+4. A `401` on any RPC or upgrade clears the cookie and re-mints once from the known token; if that fails the runtime
+   publishes `AUTH_REQUIRED` and the UI asks for a fresh token (`dsh web` prints a new one on every restart).
+
+## 2. Unary RPC
 
 ```text
-POST {baseUrl}/api/{method}
+POST {baseUrl}/api/{namespace}/{method}
 Content-Type: application/json
-Authorization: Bearer <token>   // token 非空时
+Cookie: dsh-auth-…=…
+Authorization: Bearer <local token>      // relay gateway only
 ```
-
-本地模式 SSE 失败或超时（约 3s）会退回轮询 `session.history`。远程模式 **mux 不断线重放漏掉的 `session/event`**，重连后必须再拉一次 `session.history`。
-
-## 2. RPC 信封
-
-请求：
 
 ```json
-{
-  "type": "client-request",
-  "rpcId": "dsh-g1-12",
-  "method": "session.prompt",
-  "payload": { }
-}
+{ "type": "client-request", "rpcId": "dsh-g1-12", "method": "session/prompt",
+  "payload": { "args": { "request": { … } } } }
 ```
 
-`rpcId` 由 App 生成：`dsh-g{connectionGeneration}-{seq}`。连接世代失效时，在途请求以 `generation-cancelled` 结束。
-
-成功响应取 `result.ok == true` 的 `result.value`：
+`payload` always carries exactly one `args` object whose keys are the **parameter names** of the Remote method.
+Responses:
 
 ```json
-{
-  "result": {
-    "ok": true,
-    "value": { }
-  }
-}
+{ "type": "server-response", "rpcId": "dsh-g1-12", "result": { "ok": true, "value": { … } } }
+{ "type": "server-response", "rpcId": "dsh-g1-12", "result": { "ok": false, "error": { "code": "session/title-invalid", "message": "…", "details": { } } } }
 ```
 
-失败：
+Void results omit `value`; the runtime hands callers an empty object. Timeout 30 s (120 s for prompts carrying images).
+Transport failures surface as `transport-{httpStatus}`; a lost connection generation as `generation-cancelled`.
 
-```json
-{
-  "result": {
-    "ok": false,
-    "error": { "code": "...", "message": "...", "details": { } }
-  }
-}
-```
+### Endpoint catalogue (what the App sends)
 
-超时 30 秒。传输错误码形如 `transport-{httpStatus}`。
-
-审批 / 提问 **不是** unary RPC，见第 6 节 `POST /api/respond`。
-
-## 3. 远程就绪顺序
-
-远程 `DshHostConnectionRuntime` 在 `productReady` 之前会排队 RPC。就绪步骤：
-
-1. 同时打开 WS `/api/events.mux` 与 `/api/events.host`
-2. `host.describe`
-3. 并行 `workspace.list`、`session.list` 作为基线
-4. `READY` 后冲刷缓冲帧、发出排队中的 RPC
-
-断开后 `generation++`，1 秒后重连。
-
-## 4. App 已调用的方法
-
-常量在 `DshHostProtocol`。下表是当前仓库 **真正发出去的** 调用。
-
-### 握手与凭据
-
-| method | 主要 payload | 用途 |
+| Endpoint | `args` | Purpose |
 | --- | --- | --- |
-| `host.describe` | `{}` | 远程握手 |
-| `llm.providers` | `{}` | 是否存在 `deepseek-official` |
-| `settings.describe` | `{}` | 读 `llm-deepseek` 的 `apiKeyEnv` |
-| `credentials.describe` | `{ refs: ["DEEPSEEK_API_KEY"] }` | Key 是否已配置、是否可写 |
-| `credentials.set` | `{ ref, value }` | 仅本地模式写入手机侧 Key |
+| `session/list` | `{ "_request": {} }` | Session rows: `sessionId`, `updatedAt`, `running`, `blank`, `cwd`, `projections.values.title` |
+| `session/create` | `{ "request": { "workspaceId"? } }` | → `{ sessionId }` |
+| `session/prompt` | `{ "request": { "requestId", "sessionId", "mode": "queue", "content": [...], "clientTimeZone" } }` | Send a user turn (§4) |
+| `session/cancel` | `{ "request": { "sessionId" } }` | Stop the running turn |
+| `session/rename` | `{ "request": { "sessionId", "title" } }` | → `{ title, seq }`; blank title → `session/title-invalid` |
+| `session/fork` | `{ "request": { "sessionId", "atSeq"? } }` | → `{ sessionId }` |
+| `session/attachment` | `{ "request": { "sessionId", "attachmentId" } }` | → `{ attachment: ImageAttachmentRef, data: base64 }` |
+| `session/updateQueue` | `{ "request": { "sessionId", "itemId", "action" } }` | `edit` / `remove` / `steer` |
+| `session/page` | `{ "request": { "address", "throughSeq", "beforeSeq"?, "maxMessages"? } }` | Older history pages |
+| `session/modelCatalog` | `{}` | `{ default, routableProviders, groups[], failures[] }` |
+| `session/selectModel` | `{ "request": { "sessionId", "provider", "model", "reasoningEffort"? } }` | → `{ selected }` |
+| `skills/list` | `{ "request": { "sessionId" } }` | `/` completion |
+| `pluginInventory/list` | `{}` | Read-only plugin inventory (`entries[]`, `agentPresets[]?`) |
+| `workspace/create` / `rename` / `delete` / `insertBefore` / `archiveSession` | `{ "request": { … } }` | Workspace registry mutations |
+| `directoryPicker/list` | `{ "path"? }` | Directory browser |
+| `directoryPicker/createDirectory` | `{ "path", "name" }` | → path string |
+| `goals/edit` | `{ "agentId", "ref": { id, revision }, "request": { objective } }` | `agentId` is the session id |
+| `goals/pause` / `resume` / `clear` | `{ "agentId", "ref" }` | |
+| `credentials/describe` | `{ "refs": [...] }` | API-key status |
+| `credentials/set` | `{ "ref", "value" }` | Write the Host API key |
+| `llm/listProviders`, `settings/describe` | `{}` | Provider / settings facts |
+| `$events/result` | `{ "clientId", "eventId", "outcome" }` | Answer a waterfall (§5) |
 
-### 工作区与目录
+Export is not an RPC: `GET /api/session.export?sessionId=&includeDescendants=` (cookie required).
 
-| method | 主要 payload | 用途 |
-| --- | --- | --- |
-| `workspace.list` | `{}` | 基线：`items`、`archivedSessionIds` |
-| `workspace.create` | `{ path }` | 新建工作区 |
-| `workspace.rename` | `{ workspaceId, title }` | 改名 |
-| `workspace.delete` | `{ workspaceId }` | 删除工作区 |
-| `workspace.insertBefore` | `{ workspaceId, beforeWorkspaceId? }` | 排序 |
-| `workspace.archiveSession` | `{ sessionId }` | 归档会话 |
-| `host.listDirectory` | `{ path? }` | 选目录 |
-| `host.createDirectory` | `{ path, name }` | 建子目录 |
+## 3. Streams: `/api/remote.mux`
 
-### 会话
-
-| method | 主要 payload | 用途 |
-| --- | --- | --- |
-| `session.list` | `{}` | `items[]`：`sessionId`、`running`、`blank`、`cwd`、`projections.values.title`、`agentPreset` |
-| `session.create` | `{ workspaceId? }` | 返回 `sessionId` |
-| `session.history` | `{ sessionId, maxMessages: 80 }` | 重放时间线；条目含 `event` 与可选 `view` |
-| `session.models` | `{ sessionId }` | 当前模型与分组列表 |
-| `session.selectModel` | `{ sessionId, provider, model, reasoningEffort? }` | 切换模型 |
-| `session.prompt` | 见第 5 节 | 发用户消息 |
-| `session.cancel` | `{ sessionId }` | 停止生成 |
-| `session.rename` | `{ sessionId, title }` | 改会话标题 |
-| `session.fork` | `{ sessionId, atSeq? }` | 分叉 |
-| `session.updateQueue` | `{ sessionId, itemId, action }` | 队列 `edit` / `remove` / `steer` |
-| `session.attachment` | `{ sessionId, attachmentId }` | 读历史图片：`attachment` + Base64 `data` |
-| `skill.list` | `{ sessionId }` | `/` 补全用的 skill 列表 |
-| `agentPreset.list` | （已声明常量，UI 目前只展示会话上的 preset 名） | 预留 |
-| `goal.edit` / `pause` / `resume` / `clear` | `{ sessionId, ref: { id, revision }, objective? }` | Goal 条 |
-
-导出不是 RPC：`GET /api/session.export?sessionId=&includeDescendants=`。
-
-队列 `action` 示例：
+One WebSocket carries independently cancellable logical streams:
 
 ```json
-{ "kind": "edit", "content": [{ "type": "text", "text": "..." }] }
-{ "kind": "remove" }
-{ "kind": "steer" }
+→ { "type": "open",   "streamId": "stream-…", "endpoint": "session/follow", "payload": { "args": { … } } }
+→ { "type": "cancel", "streamId": "stream-…" }
+← { "type": "item",   "streamId": "stream-…", "value": { … } }
+← { "type": "end",    "streamId": "stream-…" }
+← { "type": "error",  "streamId": "stream-…", "error": { "code", "message", "details" } }
 ```
 
-## 5. `session.prompt` 与流式
+The Host pings every 2 s; the phone answers at the protocol layer. Any socket close ends every logical stream.
 
-当前 App **只发文本**：
+### Ready sequence (one connection generation)
+
+1. Ensure a cookie (§1).
+2. Open the socket; on `OPEN` open **`$events`** with `{ "args": {} }`. Its first item must be
+   `{ "type": "ready", "clientId", "host": { "home" } }`.
+3. Open **`session/control`** `{}` → first item `{ "type": "baseline", "value": { "queues", "jobs", "projections" } }`.
+4. Open **`workspace/follow`** `{}` → first item `{ "type": "baseline", "value": { "items", "archivedSessionIds" } }`.
+5. Call `session/list`.
+6. `READY` once all four arrived; queued RPCs and stream opens are flushed. On any failure the generation is
+   invalidated and retried after 1 s; `401`/`403` on the upgrade goes through the re-mint path instead.
+
+### `$events`
+
+| Frame | Meaning |
+| --- | --- |
+| `{ "type": "emit", "event": "api-session/added", "args": [summary] }` | New session row |
+| `emit api-session/removed [sessionId]` | Row removed; the App drops its follow and caches |
+| `emit api-session/status [sessionId, running]` | Turn started / finished |
+| `emit api-session/activity [sessionId, updatedAt]` | List ordering hint |
+| `emit api-session/error [sessionId, message]` | Agent failure outside a durable turn |
+| `emit settings/document-updated`, `llm/adapters-updated`, `commands/change`, … | Catalog invalidation |
+| `{ "type": "waterfall", "event": "approval/request" \| "user-questions/request", "eventId", "agentId", "request" }` | Pending interaction; `agentId` **is** the session id |
+| `{ "type": "cancel", "eventId" }` | The Host withdrew a pending waterfall |
+
+### `session/control`
+
+`baseline` → then `{ "type": "queue", "sessionId", "items" }`, `{ "type": "jobs", "sessionId", "jobs" }`,
+`{ "type": "projection", "sessionId", "key", "value", "seq" }`. Projection keys the App reads: `title`, `goal`,
+`modelSelection` (`{ lastUsed, next }`), `imageLimits` (§4), `sessionListMetadata`.
+
+### `workspace/follow`
+
+`baseline` → then `upsert { workspace }`, `remove { workspaceId }`, `order { workspaceIds }`, `archived { archivedSessionIds }`.
+
+### `session/follow` (per observed session)
 
 ```json
-{
-  "sessionId": "...",
+{ "args": { "request": { "address": { "kind": "session", "sessionId": "…" }, "maxMessages": 80, "assistantStream": true } } }
+```
+
+| Frame | Meaning |
+| --- | --- |
+| `{ "type": "snapshot", "header", "cursor", "records": [{ "type": "event", "event" }], "hasMore", "projections", "assistantStream"? }` | Opening page; `assistantStream.activeAttempt.stream` replays an in-flight reply after reconnect |
+| `{ "type": "event", "event": { "type", "seq", "time", "data" } }` | One durable event, gap-free after the snapshot cursor |
+| `{ "type": "assistant-stream", "frame": { "type": "start" \| "chunk" \| "end", … } }` | Process-local model stream (only with `assistantStream: true`) |
+
+Durable event types the App folds (`DshWebTimelineParser`, `DshRemoteToolCallModels`):
+
+| `event.type` | Use |
+| --- | --- |
+| `user/message` | User bubble (text + `{type:"image", attachment: ImageAttachmentRef}` blocks) or context injection when `source.kind != user` |
+| `assistant/message` | Committed reply blocks: `text`, `reasoning`, `image`, unknown → JSON card |
+| `assistant/attempt` | Failed attempt (stream only) |
+| `tool/call` + `tool/result` | One tool card; `tool/result.meta.diffs` feeds the diff view |
+| `turn/start` / `turn/end` | `turn/end.reason.kind`: `completed` \| `aborted` \| `error` (`reason.error.message`) |
+
+`assistant-stream.chunk.chunk` is an LLM `StreamChunk`: `text-delta` / `reasoning-delta` drive the live bubble,
+`finish` carries the failure when `reason.kind == "error"`. `end.outcome` names the committed `assistant/message` seq
+(or `abandoned`).
+
+## 4. Sending a turn
+
+```json
+{ "args": { "request": {
+  "requestId": "mobile-…",                 // client-minted, echoed as user/message.source.rpcId
+  "sessionId": "…",
   "mode": "queue",
-  "content": [{ "type": "text", "text": "用户输入" }]
-}
+  "content": [
+    { "type": "text", "text": "…" },
+    { "type": "image", "mediaType": "image/png", "data": "<canonical base64>", "name": "photo.png" }
+  ],
+  "clientTimeZone": "UTC" } } }
 ```
 
-`mode` 固定 `queue`。若 Host 立刻返回 `command.kind == success`，当作 slash 命令完成，不再等流。
+The HTTP result is only a receipt (`{ accepted: true }`); the reply arrives on the session's `session/follow`
+stream. The App matches `user/message.source.rpcId` to its `requestId`, then routes `assistant-stream` chunks and
+`tool/*` events for that session into the live bubble until `turn/end`.
 
-官方图片通道（尚未从输入区发出）应是同一 `content` 数组里再加：
+Images: only PNG / JPEG / WebP / GIF; limits come from the `imageLimits` projection
+(`maxImageBytes`, `maxImagesPerMessage`, `maxMessageImageBytes`, `maxImagePixels`, `maxImageDimension`,
+`mediaTypes`) and are checked on the phone before sending by `DshAttachmentPrevalidation`, which reports the
+same `details.reason` codes the Host would. `session/prompt` answers only a receipt, and that receipt is the
+point where the Host has validated and stored the images — the composer shows "sending" until it lands.
+A rejected prompt appends no `user/message`, so nothing durable exists to display. Rejections arrive as
+`session/attachment-invalid` with `details.reason` ∈ `TOO_MANY_IMAGES`, `IMAGES_TOO_LARGE`, `IMAGE_TOO_LARGE`,
+`IMAGE_TOO_MANY_PIXELS`, `IMAGE_DIMENSION_TOO_LARGE`, `UNSUPPORTED_IMAGE_TYPE`, `INVALID_IMAGE_BASE64`,
+`IMAGE_TYPE_MISMATCH`, `MODEL_DOES_NOT_SUPPORT_IMAGES`. The durable log keeps only the `ImageAttachmentRef`
+(`attachmentId`, `mediaType`, `bytes`, `width`, `height`, `name?`); bytes are read back with `session/attachment`.
+
+## 5. Approvals and questions
+
+Both are Host waterfalls forwarded over `$events`; the App is one answerer in the chain.
 
 ```json
-{ "type": "image", "mediaType": "image/png", "data": "<canonical-base64>", "name": "photo.png" }
+← { "type": "waterfall", "event": "approval/request", "eventId": "…", "agentId": "<sessionId>",
+    "request": { "toolName": "bash", "callId": "call_…", "reason": "…" } }
+→ POST /api/$events/result  { "args": { "clientId": "<from ready>", "eventId": "…",
+    "outcome": { "kind": "result", "value": "allowed-once" | "rejected" } } }
 ```
-
-只支持 PNG / JPEG / WebP / GIF。限额看 Host 的 `imageLimits` projection。PDF 等通用文件 **不在** 该协议里。
-
-流式结果不走 prompt 的 HTTP 响应体，而走 mux 上的 `session/event`。App 用 prompt 的 `rpcId` 对上事件 `source.rpcId`。`turn/end` 结束一轮。重连后若 Host 仍在跑，用 `adoptLiveStream` 挂上现有 turn，不重新 prompt。
-
-## 6. 下行：mux / host / respond
-
-信封常见形状：`{ "type", "payload" }`。远程连两条 WebSocket。
-
-### `/api/events.mux`
-
-| type | App 行为 |
-| --- | --- |
-| `session/subscribed` | 记下 `lastSeq` |
-| `session/event` | 写入 store；驱动工具卡片与流式 delta |
-| `session/queue` | 刷新队列码头 |
-| `session/jobs` | 刷新 jobs |
-| `session/projection` | 标题等投影 |
-| `approval/requested` | 审批卡；用信封或 payload 的 `rpcId` |
-| `question/requested` | 提问卡 |
-| `approval/resolved` / `question/resolved` | 清 pending |
-
-`session/event` 里 App 关心的 `event.type`：
-
-| type | 用途 |
-| --- | --- |
-| `user/message` | 用户气泡或上下文注入（`source.kind != user`） |
-| `assistant/chunk` | `text` / `text-delta` 正文；`reasoning-delta` 为 Think；`finish` 可带 error |
-| `assistant/message` | 该步完整正文 |
-| `tool/call` + `tool/result` | 折叠为一条工具卡片，优先用帧上的 `view` |
-| `turn/end` | 结束流；`reason.error` 为失败 |
-
-上下文、工具 `view.card`（terminal / read / diff / search / web）见 `DshWebTimelineParser`、`DshRemoteToolCallModels`。
-
-### `/api/events.host`
-
-| type | 用途 |
-| --- | --- |
-| `host/remote-event` | 设置变更等 |
-| `host/session-added` | 新空白会话 |
-| `host/session-status` | `running` |
-| `host/session-removed` | 删会话并清缓存 |
-| `host/workspace-order-changed` | 工作区顺序 |
-
-### `POST /api/respond`
-
-回答 Host 发起的审批 / 提问（body **不是** `client-request`）：
 
 ```json
-{
-  "type": "client-response",
-  "rpcId": "<requested 帧上的 rpcId>",
-  "result": { "ok": true, "value": { } }
-}
+← { "type": "waterfall", "event": "user-questions/request", "eventId", "agentId",
+    "request": { "questions": [{ "id", "question", "header"?, "detail"?, "options"?: [{ label, description? }], "multiSelect"? }] } }
+→ outcome.value = { "answers": [{ "id", "selected": [...], "custom"? }] }
 ```
 
-审批 `value`：`{ sessionId, approvalId, outcome }`，`outcome` 仅 `allowed-once` | `rejected`。
+`{ "kind": "next" }` defers to the Host default (used for unknown waterfalls); `{ "kind": "rejected", "error" }`
+fails the request. A `cancel` frame removes the pending card.
 
-提问 `value`：`{ sessionId, answer }`，`answer` 形如 `{ answers: [{ id, selected: [...], custom? }] }`。
+## 6. Code map
 
-## 7. 代码入口
-
-| 文件 | 职责 |
+| File | Role |
 | --- | --- |
-| `DshHostProtocol.kt` | 路径常量、RPC runtime、远程 repository、历史解析 |
-| `DshRemoteRepository.kt` | 扫码 / SSH 门面 |
-| `DshLegacyHostRepository.kt` | 本地 HTTP + SSE / 轮询 |
-| `DshRemoteToolCallModel.kt` | `tool/call`+`result` → 卡片模型 |
-| `DshHostStore.kt` | 会话、事件、队列、pending 内存投影 |
-| `DshWebSocketModule.kt` / `DshSseModule.kt` | 传输 |
+| `DshHostProtocol.kt` | Endpoint constants, `args`/`request` wrappers, `DshHostConnection`, timeline parser, `ImageAttachmentRef` extraction |
+| `DshHostRuntime.kt` | `DshHostAuthenticator`, `DshRemoteMux` (logical streams), `DshHostConnectionRuntime` (auth, generations, ready sequence, unary) |
+| `DshRemoteHostRepository.kt` | Frame reducers for `$events` / control / workspace / follow, live prompt streams, waterfalls, model catalog, plugin inventory |
+| `DshRemoteRepository.kt` | Page-facing facade + `DshStoredHostAuthenticator` (cookie persistence, token source) |
+| `DshWebSocketModule.kt`, `BridgeModule.mintAuthCookie` | Native bridges (cookie header, `send`, redirect-free cookie minting) |
+| `DshMediaModule.kt`, `KRDshMediaModule.kt`, `HRDshMediaModule.m` | Photo-library and camera sources; Base64 + `mediaType`/bytes/pixels only |
+| `DshAttachmentPrevalidation.kt` | `imageLimits` enforcement with the Host's reason codes |
+| `tools/mock-host` | Node replay Host speaking exactly this protocol |
 
-官方对照：
-
-- [sessions.ts](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/host/apiproxy/src/api/sessions.ts)
-- [api-proxy.ts](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/host/apiproxy/src/api-proxy.ts)
-- [attachment README](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/attachment/attachment/README.md)
-
-## 8. 明确未接或未发的
-
-- 发图：`session.attachment` 已能读历史图；输入区尚未把 `type: image` 放进 `session.prompt`
-- 通用文件 / PDF 上传：官方无此 RPC
-- 插件启停：`pluginInventory/list` 只读，App 未接
-- 永久删除会话：官方归档有，删除存储需扩 Host
-- `session.prompt` 的 `mode: "steer"`：队列里的 steer 走 `session.updateQueue`，不是改 prompt mode
+Upstream references (tag `dsh-v0.1.5-rc.1`): `packages/api/gateway/src/stream-protocol.ts`,
+`packages/api/session-controller/src/types.ts`, `packages/api/workspace-controller/src/types.ts`,
+`packages/client/connection/src/browser-auth.ts`, `packages/attachment/attachment/src/{types,error}.ts`,
+`packages/host/plugin-inventory/src/types.ts`, `packages/interaction/user-approval/src/types.ts`,
+`packages/interaction/user-questions/src/types.ts`.

@@ -38,15 +38,13 @@ internal class DshDisclosureRowView : ComposeView<DshDisclosureRowAttr, ComposeE
                         padding(8f, 10f, 8f, 10f)
                         borderRadius(8f)
                         backgroundColor(
-                            Color(
-                                when {
-                                    ctx.attr.errorSummary -> 0xFFFFF6F6
-                                    ctx.attr.running -> 0xFFF7FCFA
-                                    else -> 0xFFFCFDFE
-                                },
-                            ),
+                            when {
+                                ctx.attr.errorSummary -> theme.toolCardErrorBackground
+                                ctx.attr.running -> theme.toolCardRunningBackground
+                                else -> theme.toolCardBackground
+                            },
                         )
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFE4E8EC)))
+                        border(Border(1f, BorderStyle.SOLID, theme.border))
                     }
                 }
                 View {
@@ -60,6 +58,7 @@ internal class DshDisclosureRowView : ComposeView<DshDisclosureRowAttr, ComposeE
                             attr {
                                 src(ImageUri.commonAssets(ctx.attr.iconAsset))
                                 size(14f, 14f)
+                                tintColor(theme.textMuted)
                             }
                         }
                     }
@@ -67,6 +66,7 @@ internal class DshDisclosureRowView : ComposeView<DshDisclosureRowAttr, ComposeE
                         attr {
                             src(ImageUri.commonAssets("chevron-down.svg"))
                             size(14f, 14f)
+                            tintColor(theme.textMuted)
                             marginLeft(if (ctx.attr.iconAsset.isNotEmpty()) 4f else 0f)
                             transform(Rotate(if (ctx.attr.open) 0f else -90f))
                         }
@@ -77,7 +77,7 @@ internal class DshDisclosureRowView : ComposeView<DshDisclosureRowAttr, ComposeE
                             marginLeft(7f)
                             fontSize(13f)
                             fontWeightMedium()
-                            color(Color(0xFF2F3A44))
+                            color(theme.textPrimary)
                         }
                     }
                     vif({ ctx.attr.summary.isNotEmpty() }) {
@@ -87,7 +87,7 @@ internal class DshDisclosureRowView : ComposeView<DshDisclosureRowAttr, ComposeE
                                 marginLeft(7f)
                                 marginRight(7f)
                                 fontSize(13f)
-                                color(Color(0xFF9AA4AC))
+                                color(theme.textMuted)
                             }
                         }
                         Text {
@@ -96,14 +96,14 @@ internal class DshDisclosureRowView : ComposeView<DshDisclosureRowAttr, ComposeE
                                 flex(1f)
                                 lines(1)
                                 fontSize(13f)
-                                color(Color(if (ctx.attr.errorSummary) 0xFFB14646 else 0xFF727B83))
+                                color(if (ctx.attr.errorSummary) theme.dangerText else theme.textMuted)
                             }
                         }
                     }
                     vif({ ctx.attr.summary.isEmpty() }) {
                         View { attr { flex(1f) } }
                     }
-                    DshTapTarget {
+                    DshTapTarget(onLongPress = { x, y -> ctx.attr.onLongPress(x, y) }) {
                         if (ctx.attr.expandable) {
                             ctx.attr.open = !ctx.attr.open
                             ctx.attr.onToggle()
@@ -145,7 +145,7 @@ internal class DshDisclosureRowView : ComposeView<DshDisclosureRowAttr, ComposeE
                                 attr {
                                     text("暂无输出")
                                     fontSize(12f)
-                                    color(Color(0xFF8A9399))
+                                    color(theme.textMuted)
                                     margin(10f)
                                 }
                             }
@@ -174,6 +174,7 @@ internal class DshDisclosureRowAttr : ComposeAttr() {
     var onToggleJsonNode: (String) -> Unit by observable({})
     var chrome: Boolean by observable(false)
     var running: Boolean by observable(false)
+    var onLongPress: (Float, Float) -> Unit by observable({ _, _ -> })
 }
 
 /** Second-level disclosure for long terminal/read/diff bodies. */
@@ -196,8 +197,8 @@ internal class DshLongTextView : ComposeView<DshLongTextAttr, ComposeEvent>() {
                 attr {
                     flexDirectionColumn()
                     borderRadius(8f)
-                    backgroundColor(Color(0xFFF9FAFB))
-                    border(Border(1f, BorderStyle.SOLID, Color(0xFFE4E8EC)))
+                    backgroundColor(theme.codeBackground)
+                    border(Border(1f, BorderStyle.SOLID, theme.border))
                     padding(8f)
                 }
                 Scroller {
@@ -216,7 +217,7 @@ internal class DshLongTextView : ComposeView<DshLongTextAttr, ComposeEvent>() {
                             fontSize(12f)
                             lineHeight(18f)
                             fontFamily("monospace")
-                            color(Color(if (ctx.attr.error) 0xFFB53232 else 0xFF333B42))
+                            color(if (ctx.attr.error) theme.dangerText else theme.codeText)
                         }
                     }
                 }
@@ -231,7 +232,7 @@ internal class DshLongTextView : ComposeView<DshLongTextAttr, ComposeEvent>() {
                             attr {
                                 text("… 其余 $hidden 行")
                                 fontSize(12f)
-                                color(Color(0xFF4176E6))
+                                color(theme.codeAccent)
                             }
                         }
                         DshTapTarget {
@@ -251,7 +252,7 @@ internal class DshLongTextView : ComposeView<DshLongTextAttr, ComposeEvent>() {
                             attr {
                                 text("收起")
                                 fontSize(12f)
-                                color(Color(0xFF4176E6))
+                                color(theme.codeAccent)
                             }
                         }
                         DshTapTarget {
@@ -386,8 +387,8 @@ internal class DshJsonTreeView : ComposeView<DshJsonTreeAttr, ComposeEvent>() {
                     flexDirectionColumn()
                     padding(8f)
                     borderRadius(8f)
-                    backgroundColor(Color(0xFFF9FAFB))
-                    border(Border(1f, BorderStyle.SOLID, Color(0xFFE4E8EC)))
+                    backgroundColor(theme.codeBackground)
+                    border(Border(1f, BorderStyle.SOLID, theme.border))
                 }
                 val parsed = dshParseJsonTree(ctx.attr.content)
                 vif({ parsed != null }) {
@@ -411,7 +412,7 @@ internal class DshJsonTreeView : ComposeView<DshJsonTreeAttr, ComposeEvent>() {
                             text(ctx.attr.content)
                             fontSize(12f)
                             fontFamily("monospace")
-                            color(Color(0xFF333B42))
+                            color(theme.codeText)
                         }
                     }
                 }
@@ -445,6 +446,7 @@ internal class DshJsonNodeRowView : ComposeView<DshJsonNodeRowAttr, ComposeEvent
                             attr {
                                 src(ImageUri.commonAssets("chevron-down.svg"))
                                 size(12f, 12f)
+                                tintColor(theme.textMuted)
                                 transform(Rotate(if (ctx.attr.expanded) 0f else -90f))
                             }
                         }
@@ -455,7 +457,7 @@ internal class DshJsonNodeRowView : ComposeView<DshJsonNodeRowAttr, ComposeEvent
                             marginLeft(6f)
                             fontSize(12f)
                             fontFamily("monospace")
-                            color(Color(0xFF333B42))
+                            color(theme.codeText)
                         }
                     }
                     Text {
@@ -466,7 +468,7 @@ internal class DshJsonNodeRowView : ComposeView<DshJsonNodeRowAttr, ComposeEvent
                             lines(1)
                             fontSize(11f)
                             fontFamily("monospace")
-                            color(Color(0xFF7A838A))
+                            color(theme.codeTextMuted)
                         }
                     }
                     vif({ ctx.attr.node.children.isNotEmpty() }) {
@@ -528,8 +530,8 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                         flexDirectionColumn()
                         padding(8f)
                         borderRadius(10f)
-                        backgroundColor(Color(0xFFF7F9FB))
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E7ED)))
+                        backgroundColor(theme.surfaceRaised)
+                        border(Border(1f, BorderStyle.SOLID, theme.border))
                     }
                     vif({ items.size > 1 }) {
                         View {
@@ -544,13 +546,14 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                     text("队列 · ${items.size}")
                                     flex(1f)
                                     fontSize(13f)
-                                    color(Color(0xFF39424A))
+                                    color(theme.textSecondary)
                                 }
                             }
                             Image {
                                 attr {
                                     src(ImageUri.commonAssets("chevron-down.svg"))
                                     size(14f, 14f)
+                                    tintColor(theme.textMuted)
                                     transform(Rotate(if (expanded) 0f else -90f))
                                 }
                             }
@@ -571,7 +574,7 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                             flex(1f)
                                             lines(1)
                                             fontSize(13f)
-                                            color(Color(0xFF4A545C))
+                                            color(theme.textSecondary)
                                         }
                                     }
                                     Text {
@@ -579,7 +582,7 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                             text("编辑")
                                             marginLeft(8f)
                                             fontSize(12f)
-                                            color(Color(0xFF4176E6))
+                                            color(theme.accent)
                                         }
                                         event { click { if (!ctx.attr.actionBusy) ctx.attr.onEdit(item.id) } }
                                     }
@@ -588,7 +591,7 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                             text("删除")
                                             marginLeft(10f)
                                             fontSize(12f)
-                                            color(Color(0xFFD25A5A))
+                                            color(theme.danger)
                                         }
                                         event { click { if (!ctx.attr.actionBusy) ctx.attr.onRemove(item.id) } }
                                     }
@@ -597,7 +600,7 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                             text("转向")
                                             marginLeft(10f)
                                             fontSize(12f)
-                                            color(Color(if (ctx.attr.running) 0xFF4176E6 else 0xFFA4ADB3))
+                                            color(if (ctx.attr.running) theme.accent else theme.textDisabled)
                                         }
                                         event { click { if (ctx.attr.running && !ctx.attr.actionBusy) ctx.attr.onSteer(item.id) } }
                                     }
@@ -610,7 +613,7 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                             height(32f)
                                             fontSize(13f)
                                             placeholder("编辑队列消息")
-                                            placeholderColor(Color(0xFF91A0AA))
+                                            placeholderColor(theme.placeholder)
                                         }
                                         event { textDidChange { ctx.attr.onEditingTextChange(it.text) } }
                                     }
@@ -619,7 +622,7 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                             text("保存")
                                             marginLeft(8f)
                                             fontSize(12f)
-                                            color(Color(0xFF2F7D4F))
+                                            color(theme.success)
                                         }
                                         event { click { if (!ctx.attr.actionBusy) ctx.attr.onSaveEdit(item.id) } }
                                     }
@@ -628,7 +631,7 @@ internal class DshQueueDockView : ComposeView<DshQueueDockAttr, ComposeEvent>() 
                                             text("取消")
                                             marginLeft(10f)
                                             fontSize(12f)
-                                            color(Color(0xFF7A838A))
+                                            color(theme.textMuted)
                                         }
                                         event { click { if (!ctx.attr.actionBusy) ctx.attr.onCancelEdit() } }
                                     }
@@ -681,8 +684,8 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                         flexDirectionColumn()
                         padding(8f)
                         borderRadius(10f)
-                        backgroundColor(Color(0xFFF8FAFB))
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFDEE5EA)))
+                        backgroundColor(theme.surfaceRaised)
+                        border(Border(1f, BorderStyle.SOLID, theme.border))
                     }
                     View {
                         attr { height(30f); flexDirectionRow(); alignItemsCenter() }
@@ -692,13 +695,14 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                 text(if (liveCount > 0) "后台任务 · $liveCount 运行中" else "后台任务 · ${snapshot.size}")
                                 flex(1f)
                                 fontSize(13f)
-                                color(Color(0xFF39424A))
+                                color(theme.textSecondary)
                             }
                         }
                         Image {
                             attr {
                                 src(ImageUri.commonAssets("chevron-down.svg"))
                                 size(14f, 14f)
+                                tintColor(theme.textMuted)
                                 transform(Rotate(if (ctx.attr.expanded) 0f else -90f))
                             }
                         }
@@ -712,7 +716,7 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                 flexDirectionColumn()
                                 padding(6f)
                                 borderRadius(8f)
-                                backgroundColor(Color(0xFFF1F5F8))
+                                backgroundColor(theme.surfaceSunken)
                             }
                             View {
                                 attr { flexDirectionRow(); alignItemsCenter() }
@@ -720,15 +724,15 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                     attr {
                                         size(7f, 7f)
                                         borderRadius(4f)
-                                        backgroundColor(Color(
+                                        backgroundColor(
                                             when (job.status) {
-                                                "running" -> 0xFF2F9E63
-                                                "stopping" -> 0xFFD99A20
-                                                "completed" -> 0xFF77848C
-                                                "failed" -> 0xFFC64C4C
-                                                else -> 0xFF879198
+                                                "running" -> theme.success
+                                                "stopping" -> theme.warning
+                                                "completed" -> theme.textMuted
+                                                "failed" -> theme.danger
+                                                else -> theme.textMuted
                                             },
-                                        ))
+                                        )
                                     }
                                 }
                                 Text {
@@ -737,7 +741,7 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                         marginLeft(7f)
                                         fontSize(12f)
                                         fontWeightMedium()
-                                        color(Color(0xFF3C4854))
+                                        color(theme.textSecondary)
                                     }
                                 }
                                 Text {
@@ -745,7 +749,7 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                         text(job.detail.ifEmpty { dshJobStatusLabel(job.status) })
                                         marginLeft(8f)
                                         fontSize(11f)
-                                        color(Color(0xFF6A757D))
+                                        color(theme.textMuted)
                                     }
                                 }
                                 Text {
@@ -753,7 +757,7 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                         text(dshJobDuration(job, ctx.attr.now))
                                         marginLeft(8f)
                                         fontSize(11f)
-                                        color(Color(0xFF7A838A))
+                                        color(theme.textMuted)
                                     }
                                 }
                             }
@@ -763,7 +767,7 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                     marginTop(3f)
                                     lines(1)
                                     fontSize(12f)
-                                    color(Color(0xFF4B5660))
+                                    color(theme.textSecondary)
                                 }
                             }
                             vif({ job.detail.isNotEmpty() }) {
@@ -773,7 +777,7 @@ internal class DshJobsPanelView : ComposeView<DshJobsPanelAttr, ComposeEvent>() 
                                         marginTop(2f)
                                         lines(1)
                                         fontSize(11f)
-                                        color(Color(0xFF727D84))
+                                        color(theme.textMuted)
                                     }
                                 }
                             }
@@ -849,11 +853,11 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                         alignItemsCenter()
                         padding(8f, 10f, 8f, 10f)
                         borderRadius(8f)
-                        backgroundColor(Color(0xFFF7F9FB))
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFDCE5EC)))
+                        backgroundColor(theme.surfaceRaised)
+                        border(Border(1f, BorderStyle.SOLID, theme.border))
                     }
                     Image {
-                        attr { src(ImageUri.commonAssets("goal.svg")); size(14f, 14f) }
+                        attr { src(ImageUri.commonAssets("goal.svg")); size(14f, 14f); tintColor(theme.textSecondary) }
                     }
                     Text {
                         attr {
@@ -866,7 +870,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                             marginLeft(6f)
                             fontSize(12f)
                             fontWeightMedium()
-                            color(Color(if (goal.phase == "blocked") 0xFFC23B3B else 0xFF536777))
+                            color(if (goal.phase == "blocked") theme.danger else theme.textSecondary)
                         }
                     }
                     vif({ !ctx.editing }) {
@@ -877,7 +881,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                                 marginLeft(8f)
                                 lines(2)
                                 fontSize(12f)
-                                color(Color(0xFF354653))
+                                color(theme.textSecondary)
                             }
                         }
                     }
@@ -898,7 +902,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                                 text(if (ctx.attr.busy) "处理中" else "保存")
                                 marginLeft(8f)
                                 fontSize(12f)
-                                color(Color(0xFF2F7D4F))
+                                color(theme.success)
                             }
                             event {
                                 click {
@@ -913,7 +917,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                                 text("取消")
                                 marginLeft(8f)
                                 fontSize(12f)
-                                color(Color(0xFF7A838A))
+                                color(theme.textMuted)
                             }
                             event { click { if (!ctx.attr.busy) ctx.editing = false } }
                         }
@@ -925,7 +929,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                                 marginLeft(6f)
                                 lines(1)
                                 fontSize(11f)
-                                color(Color(0xFFC23B3B))
+                                color(theme.danger)
                             }
                         }
                     }
@@ -935,7 +939,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                                 text(ctx.attr.error)
                                 marginLeft(6f)
                                 fontSize(11f)
-                                color(Color(0xFFC23B3B))
+                                color(theme.danger)
                             }
                         }
                     }
@@ -945,7 +949,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                                 text(if (ctx.attr.busy) "处理中" else "暂停")
                                 marginLeft(8f)
                                 fontSize(12f)
-                                color(Color(0xFF667687))
+                                color(theme.textMuted)
                             }
                             event { click { if (!ctx.attr.busy) ctx.attr.onPause() } }
                         }
@@ -956,7 +960,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                                 text(if (ctx.attr.busy) "处理中" else "恢复")
                                 marginLeft(8f)
                                 fontSize(12f)
-                                color(Color(0xFF2F7D4F))
+                                color(theme.success)
                             }
                             event { click { if (!ctx.attr.busy) ctx.attr.onResume() } }
                         }
@@ -967,7 +971,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                             text("清除")
                             marginLeft(8f)
                             fontSize(12f)
-                            color(Color(0xFFB14646))
+                            color(theme.dangerText)
                         }
                         event { click { if (!ctx.attr.busy) ctx.attr.onClear() } }
                     }
@@ -978,7 +982,7 @@ internal class DshGoalBarView : ComposeView<DshGoalBarAttr, ComposeEvent>() {
                             text("编辑")
                             marginLeft(8f)
                             fontSize(12f)
-                            color(Color(0xFF4176E6))
+                            color(theme.accent)
                         }
                         event { click { if (!ctx.attr.busy) { ctx.draft = goal.objective; ctx.editing = true } } }
                     }
@@ -1020,22 +1024,22 @@ internal class DshApprovalPanelView : ComposeView<DshApprovalPanelAttr, ComposeE
                         flexDirectionColumn()
                         padding(14f, 14f, 14f, 14f)
                         borderRadius(16f)
-                        backgroundColor(Color.WHITE)
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFE8E1C8)))
+                        backgroundColor(theme.surface)
+                        border(Border(1f, BorderStyle.SOLID, theme.warningBorder))
                     }
                     View {
                         attr {
                             alignSelfFlexStart()
                             padding(3f, 8f, 3f, 8f)
                             borderRadius(6f)
-                            backgroundColor(Color(0xFFFFF4D6))
+                            backgroundColor(theme.warningSoft)
                         }
                         Text {
                             attr {
                                 text("等待审批")
                                 fontSize(11f)
                                 fontWeightMedium()
-                                color(Color(0xFF8A6A16))
+                                color(theme.warningText)
                             }
                         }
                     }
@@ -1046,7 +1050,7 @@ internal class DshApprovalPanelView : ComposeView<DshApprovalPanelAttr, ComposeE
                             fontSize(16f)
                             fontWeightMedium()
                             lineHeight(23f)
-                            color(Color(0xFF1F2933))
+                            color(theme.textPrimary)
                         }
                     }
                     vif({ approval.command != null }) {
@@ -1055,7 +1059,7 @@ internal class DshApprovalPanelView : ComposeView<DshApprovalPanelAttr, ComposeE
                                 marginTop(8f)
                                 padding(10f, 12f, 10f, 12f)
                                 borderRadius(10f)
-                                backgroundColor(Color(0xFFF7F9FB))
+                                backgroundColor(theme.codeBackground)
                             }
                             Text {
                                 attr {
@@ -1063,7 +1067,7 @@ internal class DshApprovalPanelView : ComposeView<DshApprovalPanelAttr, ComposeE
                                     fontSize(12f)
                                     lineHeight(18f)
                                     fontFamily("monospace")
-                                    color(Color(0xFF5C6570))
+                                    color(theme.codeText)
                                 }
                             }
                         }
@@ -1089,7 +1093,7 @@ internal class DshApprovalPanelView : ComposeView<DshApprovalPanelAttr, ComposeE
                                 attr {
                                     text(if (ctx.attr.busy) "处理中" else "拒绝")
                                     fontSize(13f)
-                                    color(Color(0xFFB14646))
+                                    color(theme.dangerText)
                                 }
                             }
                             DshTapTarget { if (!ctx.attr.busy) ctx.attr.onAnswer("rejected") }
@@ -1101,7 +1105,7 @@ internal class DshApprovalPanelView : ComposeView<DshApprovalPanelAttr, ComposeE
                                 paddingLeft(14f)
                                 paddingRight(14f)
                                 borderRadius(8f)
-                                backgroundColor(Color(if (ctx.attr.busy) 0xFFC8D7A8 else 0xFF2F7D4F))
+                                backgroundColor(if (ctx.attr.busy) theme.successFillDisabled else theme.successFill)
                                 justifyContentCenter()
                                 alignItemsCenter()
                             }
@@ -1110,7 +1114,7 @@ internal class DshApprovalPanelView : ComposeView<DshApprovalPanelAttr, ComposeE
                                     text(if (ctx.attr.busy) "处理中" else "允许一次")
                                     fontSize(13f)
                                     fontWeightMedium()
-                                    color(Color.WHITE)
+                                    color(theme.textOnAccent)
                                 }
                             }
                             DshTapTarget { if (!ctx.attr.busy) ctx.attr.onAnswer("allowed-once") }
@@ -1132,12 +1136,13 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
     override fun createAttr(): DshQuestionFlowAttr = DshQuestionFlowAttr()
     override fun createEvent(): ComposeEvent = ComposeEvent()
 
+    /** Read inside `attr {}` so navigating between questions repaints the card. */
+    private fun current(): DshPendingQuestionItem? = attr.question?.questions?.getOrNull(attr.index)
+
     override fun body(): ViewBuilder {
         val ctx = this
-        val item = ctx.attr.question?.questions?.getOrNull(ctx.attr.index)
         return {
-            vif({ item != null }) {
-                val current = item ?: return@vif
+            vif({ ctx.current() != null }) {
                 View {
                     attr {
                         marginLeft(4f)
@@ -1146,43 +1151,43 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                         flexDirectionColumn()
                         padding(14f, 14f, 14f, 14f)
                         borderRadius(16f)
-                        backgroundColor(Color.WHITE)
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFE6EAF0)))
+                        backgroundColor(theme.surface)
+                        border(Border(1f, BorderStyle.SOLID, theme.border))
                     }
                     View {
                         attr {
                             alignSelfFlexStart()
                             padding(3f, 8f, 3f, 8f)
                             borderRadius(6f)
-                            backgroundColor(Color(0xFFEEF3FA))
+                            backgroundColor(theme.accentSoft)
                         }
                         Text {
                             attr {
-                                text(current.header.ifEmpty { "需要你选择" })
+                                text(ctx.current()?.header?.ifEmpty { "需要你选择" } ?: "需要你选择")
                                 fontSize(11f)
                                 fontWeightMedium()
-                                color(Color(0xFF5B6B82))
+                                color(theme.textSecondary)
                             }
                         }
                     }
                     Text {
                         attr {
-                            text(current.question)
+                            text(ctx.current()?.question.orEmpty())
                             marginTop(10f)
                             fontSize(16f)
                             fontWeightMedium()
                             lineHeight(23f)
-                            color(Color(0xFF1F2933))
+                            color(theme.textPrimary)
                         }
                     }
-                    vif({ current.detail.isNotEmpty() }) {
+                    vif({ ctx.current()?.detail?.isNotEmpty() == true }) {
                         Text {
                             attr {
-                                text(current.detail)
+                                text(ctx.current()?.detail.orEmpty())
                                 marginTop(6f)
                                 fontSize(13f)
                                 lineHeight(19f)
-                                color(Color(0xFF6B7785))
+                                color(theme.textMuted)
                             }
                         }
                     }
@@ -1195,11 +1200,11 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                 alignItemsFlexStart()
                                 padding(10f, 12f, 10f, 12f)
                                 borderRadius(12f)
-                                backgroundColor(Color(if (selected) 0xFFEFF5FF else 0xFFF7F9FB))
+                                backgroundColor(if (selected) theme.accentSoft else theme.surfaceRaised)
                                 border(Border(
                                     1f,
                                     BorderStyle.SOLID,
-                                    Color(if (selected) 0xFFB7D0F5 else 0xFFE8EDF2),
+                                    if (selected) theme.accentBorder else theme.border,
                                 ))
                             }
                                 View {
@@ -1210,9 +1215,9 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                         border(Border(
                                             1.5f,
                                             BorderStyle.SOLID,
-                                            Color(if (selected) 0xFF4176E6 else 0xFFC5CDD6),
+                                            if (selected) theme.accent else theme.textDisabled,
                                         ))
-                                        backgroundColor(Color(if (selected) 0xFF4176E6 else 0x00FFFFFF))
+                                        backgroundColor(if (selected) theme.accent else Color(0x00FFFFFF))
                                         justifyContentCenter()
                                         alignItemsCenter()
                                     }
@@ -1220,7 +1225,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                         attr {
                                             size(if (selected) 6f else 0f, if (selected) 6f else 0f)
                                             borderRadius(3f)
-                                            backgroundColor(Color.WHITE)
+                                            backgroundColor(theme.textOnAccent)
                                         }
                                     }
                                 }
@@ -1235,7 +1240,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                         text(option.label)
                                         fontSize(14f)
                                         fontWeightMedium()
-                                        color(Color(0xFF243140))
+                                        color(theme.textPrimary)
                                     }
                                 }
                                 vif({ option.description.isNotEmpty() }) {
@@ -1245,7 +1250,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                             marginTop(3f)
                                             fontSize(12f)
                                             lineHeight(17f)
-                                            color(Color(0xFF6B7785))
+                                            color(theme.textMuted)
                                         }
                                     }
                                 }
@@ -1260,8 +1265,8 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                             paddingLeft(12f)
                             paddingRight(12f)
                             borderRadius(10f)
-                            backgroundColor(Color(0xFFF7F9FB))
-                            border(Border(1f, BorderStyle.SOLID, Color(0xFFE8EDF2)))
+                            backgroundColor(theme.surfaceRaised)
+                            border(Border(1f, BorderStyle.SOLID, theme.border))
                             justifyContentCenter()
                         }
                         Input {
@@ -1269,9 +1274,9 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                             attr {
                                 height(36f)
                                 placeholder("也可以自己写答案")
-                                placeholderColor(Color(0xFF9AA6B2))
+                                placeholderColor(theme.placeholder)
                                 fontSize(13f)
-                                color(Color(0xFF243140))
+                                color(theme.textPrimary)
                                 text(ctx.attr.custom)
                             }
                             event { textDidChange { ctx.attr.onCustomChange(it.text) } }
@@ -1283,7 +1288,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                 text(ctx.attr.error)
                                 marginTop(8f)
                                 fontSize(12f)
-                                color(Color(0xFFC23B3B))
+                                color(theme.danger)
                             }
                         }
                     }
@@ -1300,7 +1305,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                 text("${ctx.attr.index + 1} / ${ctx.attr.question?.questions?.size ?: 1}")
                                 flex(1f)
                                 fontSize(12f)
-                                color(Color(0xFF8A96A3))
+                                color(theme.textMuted)
                             }
                         }
                         vif({ ctx.attr.index > 0 }) {
@@ -1309,7 +1314,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                     text("上一题")
                                     marginRight(12f)
                                     fontSize(13f)
-                                    color(Color(0xFF4176E6))
+                                    color(theme.accent)
                                 }
                                 event { click { ctx.attr.onNavigate(-1) } }
                             }
@@ -1320,7 +1325,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                     text("下一题")
                                     marginRight(12f)
                                     fontSize(13f)
-                                    color(Color(0xFF4176E6))
+                                    color(theme.accent)
                                 }
                                 event { click { ctx.attr.onNavigate(1) } }
                             }
@@ -1339,7 +1344,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                 attr {
                                     text("跳过")
                                     fontSize(13f)
-                                    color(Color(0xFF7A838A))
+                                    color(theme.textMuted)
                                 }
                             }
                             DshTapTarget { if (!ctx.attr.busy) ctx.attr.onSkip() }
@@ -1350,7 +1355,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                 paddingLeft(16f)
                                 paddingRight(16f)
                                 borderRadius(8f)
-                                backgroundColor(Color(if (ctx.attr.busy) 0xFFB7C8FE else 0xFF4176E6))
+                                backgroundColor(if (ctx.attr.busy) theme.accentFillDisabled else theme.accentFill)
                                 justifyContentCenter()
                                 alignItemsCenter()
                             }
@@ -1359,7 +1364,7 @@ internal class DshQuestionFlowView : ComposeView<DshQuestionFlowAttr, ComposeEve
                                     text(if (ctx.attr.busy) "提交中" else "提交")
                                     fontSize(13f)
                                     fontWeightMedium()
-                                    color(Color.WHITE)
+                                    color(theme.textOnAccent)
                                 }
                             }
                             DshTapTarget { if (!ctx.attr.busy) ctx.attr.onSubmit() }
@@ -1503,13 +1508,25 @@ internal fun ViewContainer<*, *>.DshQuestionPanel(init: DshQuestionPanelView.() 
     addChild(DshQuestionPanelView(), init)
 }
 
-private fun ViewContainer<*, *>.DshTapTarget(onClick: () -> Unit) {
+/**
+ * The overlay consumes the touch, so a long press never reaches the row behind it.
+ * [onLongPress] lets a card raise the same message menu as a text bubble.
+ */
+private fun ViewContainer<*, *>.DshTapTarget(
+    onLongPress: ((Float, Float) -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     View {
         attr {
             absolutePositionAllZero()
             zIndex(2)
             backgroundColor(Color(0x00000000))
         }
-        event { click { onClick() } }
+        event {
+            click { onClick() }
+            if (onLongPress != null) {
+                longPress { params -> onLongPress(params.x, params.y) }
+            }
+        }
     }
 }

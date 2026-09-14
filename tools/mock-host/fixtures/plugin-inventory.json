@@ -1,0 +1,37 @@
+{
+  "entries": [
+    { "entryId": "web-startup", "moduleName": "@deepseek-ai/dsh-web-startup", "enabled": true, "fiberPhase": "active" },
+    { "entryId": "client-connection", "moduleName": "@deepseek-ai/dsh-client-connection", "enabled": true, "fiberPhase": "active" },
+    { "entryId": "api-session-controller", "moduleName": "@deepseek-ai/dsh-api-session-controller", "enabled": true, "fiberPhase": "active" },
+    { "entryId": "llm-deepseek", "moduleName": "@deepseek-ai/dsh-llm-deepseek", "enabled": true, "fiberPhase": "active" },
+    { "entryId": "tool-fs", "moduleName": "@deepseek-ai/dsh-tool-fs", "enabled": true, "fiberPhase": "active" },
+    { "entryId": "tool-bash", "moduleName": "@deepseek-ai/dsh-tool-bash", "enabled": true, "fiberPhase": "active" },
+    { "entryId": "mcp-memory", "moduleName": "@deepseek-ai/dsh-mcp-client", "enabled": true, "fiberPhase": "failed" },
+    { "entryId": "lsp", "moduleName": "@deepseek-ai/dsh-lsp", "enabled": false, "fiberPhase": null },
+    { "entryId": "session-title-llm", "moduleName": "@deepseek-ai/dsh-session-title-llm", "enabled": true, "fiberPhase": "loading" },
+    { "entryId": "dsh-scan-remote", "moduleName": "@yukiykchen/dsh-scan-remote", "enabled": true, "fiberPhase": "active" },
+    { "entryId": "telemetry-otel", "moduleName": "@deepseek-ai/dsh-session-telemetry-otel", "enabled": true, "fiberPhase": "pending" },
+    { "entryId": "compaction-basic", "moduleName": "@deepseek-ai/dsh-compaction-basic", "enabled": true, "fiberPhase": "unloading" }
+  ],
+  "agentPresets": [
+    {
+      "id": "default",
+      "trust": "system",
+      "name": "Default",
+      "isDefault": true,
+      "rows": [
+        { "entryId": "tool-fs", "moduleName": "@deepseek-ai/dsh-tool-fs", "enabled": true, "fiberPhase": "active" },
+        { "entryId": "tool-bash", "moduleName": "@deepseek-ai/dsh-tool-bash", "enabled": true, "fiberPhase": "active" },
+        { "entryId": null, "moduleName": "@deepseek-ai/dsh-tool-web", "enabled": "conditional", "condition": "!process.env.NO_WEB", "fiberPhase": null }
+      ]
+    },
+    {
+      "id": "reviewer",
+      "trust": "user",
+      "name": "Code reviewer",
+      "isDefault": false,
+      "broken": "presets/reviewer.yml: unknown plugin @acme/review-tools",
+      "rows": []
+    }
+  ]
+}

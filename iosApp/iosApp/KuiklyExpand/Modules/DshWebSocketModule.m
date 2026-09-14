@@ -2,28 +2,32 @@
 
 #import <OpenKuiklyIOSRender/NSObject+KR.h>
 
-@interface DshWebSocketConnection : NSObject <NSURLSessionWebSocketDelegate>
+@interface DshWebSocketConnection : NSObject <NSURLSessionWebSocketDelegate, NSURLSessionTaskDelegate>
 @property (nonatomic, copy) KuiklyRenderCallback callback;
 @property (nonatomic, copy) dispatch_block_t onFinished;
 @property (nonatomic, strong, nullable) NSURLSession *session;
 @property (nonatomic, strong, nullable) NSURLSessionWebSocketTask *webSocketTask;
 @property (atomic, assign) BOOL closed;
 @property (atomic, assign) BOOL finished;
-- (instancetype)initWithURL:(NSURL *)url token:(NSString *)token callback:(KuiklyRenderCallback)callback onFinished:(dispatch_block_t)onFinished;
+@property (atomic, assign) BOOL opened;
+- (instancetype)initWithURL:(NSURL *)url token:(NSString *)token cookie:(NSString *)cookie callback:(KuiklyRenderCallback)callback onFinished:(dispatch_block_t)onFinished;
 - (void)start;
+- (void)send:(NSString *)text;
 - (void)close;
 @end
 
 @implementation DshWebSocketConnection {
     NSURL *_url;
     NSString *_token;
+    NSString *_cookie;
 }
 
-- (instancetype)initWithURL:(NSURL *)url token:(NSString *)token callback:(KuiklyRenderCallback)callback onFinished:(dispatch_block_t)onFinished {
+- (instancetype)initWithURL:(NSURL *)url token:(NSString *)token cookie:(NSString *)cookie callback:(KuiklyRenderCallback)callback onFinished:(dispatch_block_t)onFinished {
     self = [super init];
     if (self) {
         _url = url;
         _token = [token copy];
+        _cookie = [cookie copy];
         _callback = [callback copy];
         _onFinished = [onFinished copy];
     }
@@ -37,11 +41,25 @@
     if (_token.length > 0) {
         [request setValue:[NSString stringWithFormat:@"Bearer %@", _token] forHTTPHeaderField:@"Authorization"];
     }
-    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
+    if (_cookie.length > 0) {
+        [request setValue:_cookie forHTTPHeaderField:@"Cookie"];
+    }
+    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
     configuration.timeoutIntervalForRequest = 10;
+    // The DSH cookie is bound to the Host authority we send; never let the shared jar rewrite it.
+    configuration.HTTPShouldSetCookies = NO;
+    configuration.HTTPCookieAcceptPolicy = NSHTTPCookieAcceptPolicyNever;
     self.session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
     self.webSocketTask = [self.session webSocketTaskWithRequest:request];
     [self.webSocketTask resume];
+}
+
+- (void)send:(NSString *)text {
+    if (self.closed || text.length == 0 || !self.webSocketTask) return;
+    NSURLSessionWebSocketMessage *message = [[NSURLSessionWebSocketMessage alloc] initWithString:text];
+    [self.webSocketTask sendMessage:message completionHandler:^(NSError *error) {
+        if (error) NSLog(@"DshWebSocket: send failed %@", error.localizedDescription);
+    }];
 }
 
 - (void)close {
@@ -55,6 +73,7 @@
 
 - (void)URLSession:(NSURLSession *)session webSocketTask:(NSURLSessionWebSocketTask *)webSocketTask didOpenWithProtocol:(NSString *)protocol {
     if (self.closed) return;
+    self.opened = YES;
     [self emit:@{ @"kind": @"OPEN" }];
     [self receiveWebSocketMessage];
 }
@@ -67,6 +86,20 @@
     [self finish];
 }
 
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    // A rejected upgrade (401 / 403) completes the task without ever opening.
+    if (self.closed || self.opened || !error) return;
+    NSInteger status = 0;
+    if ([task.response isKindOfClass:[NSHTTPURLResponse class]]) {
+        status = ((NSHTTPURLResponse *)task.response).statusCode;
+    }
+    [self emit:@{ @"kind": @"ERROR", @"message": error.localizedDescription ?: @"WebSocket connection failed", @"httpStatus": @(status) }];
+    self.webSocketTask = nil;
+    [self.session invalidateAndCancel];
+    self.session = nil;
+    [self finish];
+}
+
 - (void)receiveWebSocketMessage {
     if (self.closed || !self.webSocketTask) return;
     __weak typeof(self) weakSelf = self;
@@ -74,7 +107,11 @@
         __strong typeof(weakSelf) self = weakSelf;
         if (!self || self.closed) return;
         if (error) {
-            [self emit:@{ @"kind": @"ERROR", @"message": error.localizedDescription ?: @"WebSocket connection failed" }];
+            NSInteger status = 0;
+            if ([self.webSocketTask.response isKindOfClass:[NSHTTPURLResponse class]]) {
+                status = ((NSHTTPURLResponse *)self.webSocketTask.response).statusCode;
+            }
+            [self emit:@{ @"kind": @"ERROR", @"message": error.localizedDescription ?: @"WebSocket connection failed", @"httpStatus": @(status) }];
             [self.webSocketTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeGoingAway reason:nil];
             self.webSocketTask = nil;
             [self.session invalidateAndCancel];
@@ -132,11 +169,16 @@
     [self.connections[connectionId] close];
     __weak typeof(self) weakSelf = self;
     DshWebSocketConnection *connection = [[DshWebSocketConnection alloc]
-        initWithURL:url token:params[@"token"] ?: @"" callback:callback onFinished:^{
+        initWithURL:url token:params[@"token"] ?: @"" cookie:params[@"cookie"] ?: @"" callback:callback onFinished:^{
             [weakSelf.connections removeObjectForKey:connectionId];
         }];
     self.connections[connectionId] = connection;
     [connection start];
+}
+
+- (void)send:(NSDictionary *)args {
+    NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
+    [self.connections[params[@"connectionId"] ?: @""] send:params[@"data"] ?: @""];
 }
 
 - (void)disconnect:(NSDictionary *)args {

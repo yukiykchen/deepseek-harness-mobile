@@ -16,6 +16,7 @@ import com.tencent.kuikly.core.views.KeyboardParams
 import com.tencent.kuikly.core.views.List
 import com.tencent.kuikly.core.views.ListView
 import com.tencent.kuikly.core.views.ScrollParams
+import com.tencent.kuikly.core.views.SelectableOption
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -38,7 +39,7 @@ internal fun ViewContainer<*, *>.DshTurnStatus(
                     text(dshTurnStatusLabel(reconnecting()))
                     fontSize(14f)
                     fontWeightBold()
-                    color(Color(TURN_STATUS_BLUE))
+                    color(theme.turnStatus)
                 }
             }
             vif({ elapsedMs() >= TURN_STATUS_CLOCK_AFTER_MS }) {
@@ -46,7 +47,7 @@ internal fun ViewContainer<*, *>.DshTurnStatus(
                     attr {
                         text(dshFormatTurnDuration(elapsedMs()))
                         fontSize(13f)
-                        color(Color(0xFF8A9399))
+                        color(theme.textMuted)
                         marginLeft(8f)
                     }
                 }
@@ -55,7 +56,6 @@ internal fun ViewContainer<*, *>.DshTurnStatus(
     }
 }
 
-internal const val TURN_STATUS_BLUE = 0xFF4D6BFE
 internal const val TURN_STATUS_CLOCK_AFTER_MS = 15_000L
 
 internal fun ViewContainer<*, *>.DshNewSessionHome() {
@@ -79,6 +79,7 @@ internal fun ViewContainer<*, *>.DshNewSessionHome() {
                 attr {
                     src(ImageUri.commonAssets("fish.svg"))
                     size(56f, 56f)
+                    tintColor(theme.textPrimary)
                 }
             }
             View {
@@ -92,7 +93,7 @@ internal fun ViewContainer<*, *>.DshNewSessionHome() {
                         text("探索未至之境")
                         fontSize(26f)
                         fontWeightBold()
-                        color(Color(0xFF1B1F24))
+                        color(theme.textPrimary)
                     }
                 }
                 View {
@@ -103,14 +104,14 @@ internal fun ViewContainer<*, *>.DshNewSessionHome() {
                         height(22f)
                         allCenter()
                         borderRadius(11f)
-                        backgroundColor(Color(0xFFE8F1FF))
+                        backgroundColor(theme.accentSoft)
                     }
                     Text {
                         attr {
                             text("预览版")
                             fontSize(11f)
                             fontWeightMedium()
-                            color(Color(0xFF4176E6))
+                            color(theme.accent)
                         }
                     }
                 }
@@ -144,9 +145,16 @@ internal fun ViewContainer<*, *>.DshConversation(
     onUserListScroll: (ScrollParams) -> Unit,
     modelLabel: () -> String,
     attachmentMenuVisible: () -> Boolean,
+    stagedAttachments: () -> ObservableList<DshStagedAttachment>,
+    attachmentNotice: () -> String,
     voiceActive: () -> Boolean,
     onOpenModels: () -> Unit,
     onToggleAttachments: () -> Unit,
+    onPickImages: () -> Unit,
+    onCaptureImage: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onRetryAttachment: (String) -> Unit,
+    onPreviewAttachment: (String) -> Unit,
     onToggleVoice: () -> Unit,
     isWebTimeline: () -> Boolean,
     isDisclosureExpanded: (String) -> Boolean,
@@ -156,7 +164,13 @@ internal fun ViewContainer<*, *>.DshConversation(
     isJsonNodeExpanded: (String, String) -> Boolean,
     onToggleJsonNode: (String, String) -> Unit,
     onCopyToolContent: (String) -> Unit,
+    onLongPressMessage: (DshMessage, Float, Float) -> Unit,
+    onSelectionCancelled: () -> Unit,
+    batchSelectionActive: () -> Boolean,
+    isMessageBatchSelected: (String) -> Boolean,
+    onToggleMessageBatchSelection: (String) -> Unit,
     attachmentDataUrl: (String) -> String?,
+    onOpenAttachment: (DshImageAttachmentRef) -> Unit,
     queueItems: () -> ObservableList<DshQueueItem>,
     jobItems: () -> ObservableList<DshJobItem>,
     goal: () -> DshGoalSnapshot?,
@@ -205,7 +219,7 @@ internal fun ViewContainer<*, *>.DshConversation(
             flex(1f)
             width(availableWidth)
             flexDirectionColumn()
-            backgroundColor(Color.WHITE)
+            backgroundColor(theme.surface)
         }
         View {
             attr {
@@ -222,7 +236,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                 attr {
                 flex(1f)
                 width(availableWidth)
-                backgroundColor(Color.WHITE)
+                backgroundColor(theme.surface)
             }
             vfor({ conversationIds() }) { sessionId ->
                 View {
@@ -265,6 +279,39 @@ internal fun ViewContainer<*, *>.DshConversation(
                                         ref { messageRef(sessionId, message.id, it) }
                                         attr {
                                             width((availableWidth - 36f).coerceAtLeast(0f))
+                                            // Task 2: the row is the selection container, so
+                                            // createSelection/getSelection run against this ref.
+                                            selectable(SelectableOption.ENABLE)
+                                            selectionColor(theme.accent)
+                                            // Attrs are cumulative: leaving backgroundColor
+                                            // unset on the way out of batch mode would keep
+                                            // the tint, so every branch sets it.
+                                            borderRadius(10f)
+                                            backgroundColor(
+                                                if (batchSelectionActive() && isMessageBatchSelected(message.id)) {
+                                                    theme.accentSoft
+                                                } else {
+                                                    Color(0x00000000)
+                                                },
+                                            )
+                                        }
+                                        event {
+                                            longPress { params ->
+                                                onLongPressMessage(message, params.x, params.y)
+                                            }
+                                            selectCancel { onSelectionCancelled() }
+                                        }
+                                        // In batch mode the overlay takes every tap, so a tool
+                                        // card cannot expand instead of toggling its row.
+                                        vif({ batchSelectionActive() }) {
+                                            View {
+                                                attr {
+                                                    absolutePositionAllZero()
+                                                    zIndex(3)
+                                                    backgroundColor(Color(0x00000000))
+                                                }
+                                                event { click { onToggleMessageBatchSelection(message.id) } }
+                                            }
                                         }
                                         DshMessageRow(
                                             message,
@@ -285,7 +332,9 @@ internal fun ViewContainer<*, *>.DshConversation(
                                             isJsonNodeExpanded = { isJsonNodeExpanded(message.id, it) },
                                             onToggleJsonNode = { onToggleJsonNode(message.id, it) },
                                             onCopyToolContent = { onCopyToolContent(it) },
+                                            onLongPress = { x, y -> onLongPressMessage(message, x, y) },
                                             attachmentDataUrl = { attachmentDataUrl(it) },
+                                            onOpenAttachment = onOpenAttachment,
                                             contentProvider = {
                                                 val stored = messagesForSession(sessionId)
                                                     .firstOrNull { it.id == message.id }
@@ -407,13 +456,21 @@ internal fun ViewContainer<*, *>.DshConversation(
         }
             View {
                 attr {
-                    height(COMPOSER_HEIGHT)
+                    // COMPOSER_HEIGHT only fits the input and the toolbar, so anything
+                    // stacked above them has to add its own height or it pushes the send
+                    // button out of the composer.
+                    height(
+                        COMPOSER_HEIGHT +
+                            (if (attachmentMenuVisible()) ATTACHMENT_MENU_HEIGHT else 0f) +
+                            (if (stagedAttachments().isEmpty()) 0f else ATTACHMENT_STRIP_HEIGHT) +
+                            (if (attachmentNotice().isEmpty()) 0f else ATTACHMENT_ERROR_HEIGHT),
+                    )
                     width(availableWidth)
                     flexDirectionColumn()
                     padding(12f, 14f, 12f, 14f)
-                    backgroundColor(Color.WHITE)
+                    backgroundColor(theme.surface)
                     borderRadius(22f)
-                    border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E5EE)))
+                    border(Border(1f, BorderStyle.SOLID, theme.border))
                 }
                 vif({
                     isWebTimeline() && draft().startsWith("/") &&
@@ -424,9 +481,9 @@ internal fun ViewContainer<*, *>.DshConversation(
                             maxHeight(132f)
                             marginBottom(6f)
                             flexDirectionColumn()
-                            backgroundColor(Color(0xFFF7F9FB))
+                            backgroundColor(theme.surfaceRaised)
                             borderRadius(8f)
-                            border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E7ED)))
+                            border(Border(1f, BorderStyle.SOLID, theme.border))
                         }
                         vfor({ visibleSkillList(skills(), draft().removePrefix("/")) }) { skill ->
                             View {
@@ -444,7 +501,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                                         width(110f)
                                         fontSize(13f)
                                         fontWeightMedium()
-                                        color(Color(0xFF2F6F4F))
+                                        color(theme.success)
                                     }
                                 }
                                 Text {
@@ -453,20 +510,28 @@ internal fun ViewContainer<*, *>.DshConversation(
                                         flex(1f)
                                         lines(1)
                                         fontSize(11f)
-                                        color(Color(0xFF727D84))
+                                        color(theme.textMuted)
                                     }
                                 }
                             }
                         }
                     }
                 }
+            DshAttachmentStrip(
+                attachments = stagedAttachments,
+                notice = attachmentNotice,
+                onRemove = onRemoveAttachment,
+                onRetry = onRetryAttachment,
+                onPreview = onPreviewAttachment,
+            )
+
             Input {
                 ref { inputRef(it) }
                 attr {
                     height(58f)
                     backgroundColor(Color(0x00FFFFFF))
                     fontSize(15f)
-                    color(Color(0xFF28323C))
+                    color(theme.textPrimary)
                     placeholder(
                         when {
                             voiceActive() -> "正在聆听..."
@@ -475,7 +540,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                             else -> "请输入您的问题..."
                         },
                     )
-                    placeholderColor(Color(0xFF91A0AA))
+                    placeholderColor(theme.placeholder)
                     returnKeyTypeSend()
                     editable(!voiceActive())
                 }
@@ -499,30 +564,20 @@ internal fun ViewContainer<*, *>.DshConversation(
                         flexDirectionColumn()
                         padding(8f)
                         borderRadius(10f)
-                        backgroundColor(Color(0xFFF5F6F7))
+                        backgroundColor(theme.surfaceRaised)
                     }
-                    View {
-                        attr {
-                            height(32f)
-                            flexDirectionRow()
-                            alignItemsCenter()
-                            paddingLeft(8f)
-                        }
-                        Text { attr { text("图片"); fontSize(14f); color(Color(0xFF3B4147)) } }
-                        View { attr { flex(1f) } }
-                        Text { attr { text("PNG / JPG / WebP / GIF"); fontSize(11f); color(Color(0xFF9098A0)) } }
-                    }
-                    View {
-                        attr {
-                            height(32f)
-                            flexDirectionRow()
-                            alignItemsCenter()
-                            paddingLeft(8f)
-                        }
-                        Text { attr { text("文件"); fontSize(14f); color(Color(0xFF3B4147)) } }
-                        View { attr { flex(1f) } }
-                        Text { attr { text("选择本地文件"); fontSize(11f); color(Color(0xFF9098A0)) } }
-                    }
+                    DshAttachmentSourceRow(
+                        icon = "image.svg",
+                        title = "Photo library",
+                        hint = "PNG / JPEG / WebP / GIF",
+                        onClick = onPickImages,
+                    )
+                    DshAttachmentSourceRow(
+                        icon = "camera.svg",
+                        title = "Take a photo",
+                        hint = "Sent as an image attachment",
+                        onClick = onCaptureImage,
+                    )
                 }
             }
 
@@ -541,7 +596,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                         paddingLeft(12f)
                         paddingRight(9f)
                         borderRadius(20f)
-                        border(Border(1f, BorderStyle.SOLID, Color(0xFFCFD3D6)))
+                        border(Border(1f, BorderStyle.SOLID, theme.inputBorder))
                     }
                     Text {
                         attr {
@@ -549,13 +604,14 @@ internal fun ViewContainer<*, *>.DshConversation(
                             flex(1f)
                             lines(1)
                             fontSize(14f)
-                            color(Color(0xFF31363B))
+                            color(theme.textPrimary)
                         }
                     }
                     Image {
                         attr {
                             src(ImageUri.commonAssets("chevron-down.svg"))
                             size(18f, 18f)
+                            tintColor(theme.textMuted)
                         }
                     }
                     DshHitButton(onOpenModels)
@@ -563,7 +619,14 @@ internal fun ViewContainer<*, *>.DshConversation(
                 View { attr { flex(1f) } }
                 View {
                     attr { size(40f, 40f); allCenter() }
-                    Image { attr { src(ImageUri.commonAssets("sliders.svg")); size(22f, 22f) } }
+                    Image {
+                        attr {
+                            src(ImageUri.commonAssets("sliders.svg"))
+                            size(22f, 22f)
+                            tintColor(if (attachmentMenuVisible()) theme.accent else theme.textMuted)
+                        }
+                    }
+                    DshHitButton(onToggleAttachments)
                 }
                 View {
                     attr {
@@ -571,13 +634,13 @@ internal fun ViewContainer<*, *>.DshConversation(
                         marginLeft(6f)
                         borderRadius(24f)
                         allCenter()
-                        backgroundColor(Color(
+                        backgroundColor(
                             when {
-                                stopButtonVisible() -> 0xFFE05252
-                                voiceActive() -> 0xFF679EFE
-                                else -> 0xFF4176E6
+                                stopButtonVisible() -> theme.dangerFill
+                                voiceActive() -> theme.accentMuted
+                                else -> theme.accentFill
                             },
-                        ))
+                        )
                     }
                     vif({ stopButtonVisible() }) {
                         Image {
@@ -590,7 +653,13 @@ internal fun ViewContainer<*, *>.DshConversation(
                     velse {
                         Image {
                             attr {
-                                src(ImageUri.commonAssets(if (draft().isEmpty()) "mic.svg" else "send.svg"))
+                                // Staged images are a sendable turn on their own, so the
+                                // button must not fall back to the microphone for them.
+                                src(
+                                    ImageUri.commonAssets(
+                                        if (draft().isEmpty() && stagedAttachments().isEmpty()) "mic.svg" else "send.svg",
+                                    ),
+                                )
                                 size(23f, 23f)
                             }
                         }
@@ -598,7 +667,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                     DshHitButton {
                             when {
                                 stopButtonVisible() -> onStop()
-                                draft().isNotEmpty() -> onSend()
+                                draft().isNotEmpty() || stagedAttachments().isNotEmpty() -> onSend()
                                 else -> onToggleVoice()
                             }
                     }
@@ -620,7 +689,9 @@ internal fun ViewContainer<*, *>.DshMessageRow(
     isJsonNodeExpanded: (String) -> Boolean = { false },
     onToggleJsonNode: (String) -> Unit = {},
     onCopyToolContent: (String) -> Unit = {},
+    onLongPress: (Float, Float) -> Unit = { _, _ -> },
     attachmentDataUrl: (String) -> String? = { null },
+    onOpenAttachment: (DshImageAttachmentRef) -> Unit = {},
     contentProvider: (() -> String)? = null,
 ) {
     if (message.hidden) return
@@ -676,33 +747,36 @@ internal fun ViewContainer<*, *>.DshMessageRow(
         return
     }
     if (isWebTimeline && message.attachmentId != null) {
-        val dataUrl = attachmentDataUrl(message.attachmentId)
+        val attachmentId = message.attachmentId
         View {
             attr {
                 width((pagerData.pageViewWidth - 36f).coerceAtLeast(0f))
                 height(220f)
                 marginBottom(12f)
                 borderRadius(8f)
-                backgroundColor(Color(0xFFF6F8FA))
-                border(Border(1f, BorderStyle.SOLID, Color(0xFFE4E8EC)))
+                backgroundColor(theme.surfaceRaised)
+                border(Border(1f, BorderStyle.SOLID, theme.border))
                 justifyContentCenter()
                 alignItemsCenter()
             }
-            if (dataUrl != null) {
+            // The bytes arrive from `session/attachment` after this row is built, so the
+            // lookup has to sit in a reactive closure — a read in the body runs once.
+            vif({ attachmentDataUrl(attachmentId) != null }) {
                 Image {
                     attr {
-                        src(dataUrl)
+                        src(attachmentDataUrl(attachmentId).orEmpty())
                         width((pagerData.pageViewWidth - 40f).coerceAtLeast(0f))
                         height(216f)
                         resizeCover()
                     }
                 }
-            } else {
+            }
+            velse {
                 Text {
                     attr {
                         text("图片加载中")
                         fontSize(12f)
-                        color(Color(0xFF7A838A))
+                        color(theme.textMuted)
                     }
                 }
             }
@@ -754,6 +828,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
                     maxBodyLines = 8
                     chrome = true
                     running = message.toolRunning
+                    this.onLongPress = onLongPress
                 }
             }
         }
@@ -808,6 +883,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
                     maxBodyLines = 8
                     this.isJsonNodeExpanded = isJsonNodeExpanded
                     this.onToggleJsonNode = onToggleJsonNode
+                    this.onLongPress = onLongPress
                     chrome = true
                     running = message.toolRunning
                 }
@@ -830,7 +906,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
                     DshMessageRole.ASSISTANT -> "DeepSeek"
                 })
                 fontSize(11f)
-                color(Color(if (isError) 0xFFC23B3B else 0xFF84939D))
+                color(if (isError) theme.danger else theme.textMuted)
                 marginBottom(5f)
             }
         }
@@ -842,21 +918,26 @@ internal fun ViewContainer<*, *>.DshMessageRow(
                 maxWidth(620f)
                 padding(if (isUser) 10f else 0f, if (isUser) 14f else 0f, if (isUser) 10f else 0f, if (isUser) 14f else 0f)
                 borderRadius(if (isUser) 18f else 0f)
-                backgroundColor(Color(
+                backgroundColor(
                     when {
-                        isUser -> 0xFFEDF3FE
-                        isError -> 0xFFFFEEEE
-                        else -> 0x00FFFFFF
+                        isUser -> theme.userBubble
+                        isError -> theme.errorBubble
+                        else -> Color(0x00FFFFFF)
                     },
-                ))
+                )
             }
             if (isUser || isError) {
-                Text {
-                    attr {
-                        text(message.content)
-                        lines(Int.MAX_VALUE)
-                        fontSize(15f)
-                        color(Color(if (isUser) 0xFF34415B else 0xFFB53232))
+                if (message.attachments.isNotEmpty()) {
+                    DshBubbleAttachments(message.attachments, attachmentDataUrl, onOpenAttachment)
+                }
+                if (message.content.isNotEmpty()) {
+                    Text {
+                        attr {
+                            text(message.content)
+                            lines(Int.MAX_VALUE)
+                            fontSize(15f)
+                            color(if (isUser) theme.userBubbleText else theme.dangerText)
+                        }
                     }
                 }
             } else {
@@ -873,7 +954,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
                             liveContent = contentProvider
                             streamingProvider = pageStreaming
                             streaming = live
-                            darkMode = false
+                            darkMode = theme.isDark
                         }
                     }
                     vif({ pageStreaming() && (contentProvider?.invoke() ?: message.content).isNotEmpty() }) {
@@ -881,7 +962,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
                             attr {
                                 text(DshStreamingMarkdown.CURSOR)
                                 fontSize(14f)
-                                color(Color(0xFF4176E6))
+                                color(theme.accent)
                                 marginTop(2f)
                             }
                         }

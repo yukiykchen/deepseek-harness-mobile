@@ -315,6 +315,56 @@ internal class BridgeModule : Module() {
         }
     }
 
+    /**
+     * `GET {baseUrl}/?token={launchToken}` with redirects disabled; returns the
+     * `name=value` of the `Set-Cookie` the Host answers with. [bearer] is the
+     * phone-local relay gateway token, empty for SSH / direct connections.
+     */
+    fun mintAuthCookie(baseUrl: String, launchToken: String, bearer: String, callback: (cookie: String?, error: String?) -> Unit) {
+        callNativeMethod("mintAuthCookie", JSONObject().apply {
+            put("baseUrl", baseUrl)
+            put("token", launchToken)
+            put("bearer", bearer)
+        }) { value ->
+            val cookie = value?.optString("cookie").orEmpty()
+            if (cookie.isNotEmpty()) callback(cookie, null)
+            else callback(null, value?.optString("message").orEmpty().ifEmpty { "HTTP ${value?.optInt("status") ?: 0}" })
+        }
+    }
+
+    /** Hands [text] to the system share sheet (Android `ACTION_SEND`, iOS `UIActivityViewController`). */
+    fun shareText(title: String, text: String) {
+        callNativeMethod("shareText", JSONObject().apply {
+            put("title", title)
+            put("text", text)
+        }, null)
+    }
+
+    /** Shares [html] as an `.html` file, so the receiving app keeps the formatting. */
+    fun shareHtml(title: String, html: String) {
+        callNativeMethod("shareHtml", JSONObject().apply {
+            put("title", title)
+            put("html", html)
+        }, null)
+    }
+
+    /**
+     * Opens the system print dialog on [html]. On both platforms "Save as PDF" is a
+     * destination in that dialog, which is how the export reaches a real PDF without
+     * the app shipping a PDF writer.
+     */
+    fun printHtml(title: String, html: String) {
+        callNativeMethod("printHtml", JSONObject().apply {
+            put("title", title)
+            put("html", html)
+        }, null)
+    }
+
+    /** Switches the status-bar glyphs (and the native window background) to the app theme. */
+    fun setStatusBarStyle(dark: Boolean) {
+        callNativeMethod("setStatusBarStyle", JSONObject().apply { put("dark", dark.toInt()) }, null)
+    }
+
     fun humanVerification(params: JSONObject, callbackFn: CallbackFn? = null): String {
         return syncCallNativeMethod(HUMAN_VERIFICATION, params, callbackFn)
     }

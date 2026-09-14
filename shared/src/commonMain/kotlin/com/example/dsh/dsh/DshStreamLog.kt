@@ -11,9 +11,26 @@ internal object DshStreamLog {
         KLog.i(TAG, message)
     }
 
+    /**
+     * Logcat plus a structured record for the in-app log centre (Task 6). Only the
+     * observations the log centre is specified to keep go through here; everything else
+     * stays a plain [i] line.
+     */
+    fun record(
+        level: DshLogLevel,
+        eventType: String,
+        message: String,
+        sessionId: String = "",
+        ref: String = "",
+        sizeBytes: Int = 0,
+    ) {
+        KLog.i(TAG, message)
+        DshLogCenter.record(level, eventType, message, sessionId, ref, sizeBytes)
+    }
+
     fun question(message: String) {
         KLog.i("DshQuestion", message)
-        i("question.$message")
+        record(DshLogLevel.INFO, DshLogEvent.HOST_EVENT, "question.$message")
     }
 
     fun preview(text: String, max: Int = 96): String {

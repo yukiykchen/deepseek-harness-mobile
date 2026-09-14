@@ -1,0 +1,18 @@
+{
+  "name": "dsh-mobile-admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Companion DSH Host plugin for the DSH mobile app: authenticated plugin lifecycle control the official read-only inventory does not offer.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.19"
+  }
+}

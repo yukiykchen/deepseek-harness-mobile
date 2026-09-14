@@ -74,19 +74,10 @@ kotlin {
                 implementation(kotlin("test"))
             }
         }
-        val sseMain by creating {
-            dependsOn(commonMain)
-            dependencies {
-                implementation(libs.ktor.client.core)
-                implementation(libs.ktor.client.websockets)
-            }
-        }
         val androidMain by getting {
-            dependsOn(sseMain)
             dependencies {
                 api("com.tencent.kuikly-open:core-render-android:${Version.getKuiklyVersion()}")
                 implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
-                implementation(libs.ktor.client.okhttp)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
             }
         }
@@ -96,10 +87,8 @@ kotlin {
         val iosSimulatorArm64Main by getting
         val iosMain by creating {
             dependsOn(commonMain)
-            dependsOn(sseMain)
             dependencies {
                 implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
-                implementation(libs.ktor.client.darwin)
             }
             iosX64Main.dependsOn(this)
             iosArm64Main.dependsOn(this)
@@ -114,12 +103,7 @@ kotlin {
             iosArm64Test.dependsOn(this)
             iosSimulatorArm64Test.dependsOn(this)
         }
-        val jsMain by getting {
-            dependsOn(sseMain)
-            dependencies {
-                implementation(libs.ktor.client.js)
-            }
-        }
+        val jsMain by getting
     }
 }
 

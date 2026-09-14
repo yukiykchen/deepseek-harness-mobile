@@ -1,0 +1,17 @@
+{
+  "id": "approval",
+  "match": ["approve", "approval", "permission", "审批"],
+  "description": "Asks for tool approval through the $events waterfall; the turn continues with the decision.",
+  "steps": [
+    { "kind": "text", "text": "I need to remove the build directory. Please approve the command.", "chunk": 12, "delayMs": 25 },
+    {
+      "kind": "approval",
+      "toolName": "bash",
+      "command": "rm -rf build && ./gradlew assembleDebug",
+      "reason": "Deletes the build directory before rebuilding.",
+      "result": "BUILD SUCCESSFUL in 42s",
+      "afterAllowed": "Thanks — the build directory was removed and the debug build succeeded.",
+      "afterRejected": "Understood, I did not touch the build directory."
+    }
+  ]
+}
