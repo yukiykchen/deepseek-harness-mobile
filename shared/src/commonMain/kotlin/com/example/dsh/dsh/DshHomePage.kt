@@ -67,6 +67,7 @@ internal class DshHomePage : BasePager() {
     private var sshSettingsVisible by observable(false)
     private var sshSettingsBusy by observable(false)
     private var sshSettingsError by observable("")
+    private var settingsPageVisible by observable(false)
     private val sessionScope: DshSessionScope
         get() = DshSessionScope(connectionMode, remoteProfileId)
     private val activeConnectionId: String
@@ -511,7 +512,7 @@ internal class DshHomePage : BasePager() {
                         activeId = { ctx.activeSessionId },
                         animated = { ctx.sessionDrawerAnimated },
                         onClose = { ctx.closeSessionDrawer() },
-                        onOpenSettings = { ctx.openConnectionSettings() },
+                        onOpenSettings = { ctx.openSettingsPage() },
                         onNewSession = { ctx.createSession() },
                         onSelect = { id ->
                             ctx.closeSessionDrawer()
@@ -547,6 +548,13 @@ internal class DshHomePage : BasePager() {
                         },
                         onSave = { ctx.saveDeepSeekApiKey() },
                         onClose = { ctx.closeCredentialSettings() },
+                    )
+                }
+                vif({ ctx.settingsPageVisible }) {
+                    DshSettingsPage(
+                        connectionModeLabel = { if (ctx.sshMode) "SSH" else "扫码" },
+                        onClose = { ctx.closeSettingsPage() },
+                        onOpenConnection = { ctx.openConnectionSettings() },
                     )
                 }
                 vif({ ctx.sshSettingsVisible }) {
@@ -1106,6 +1114,22 @@ internal class DshHomePage : BasePager() {
         credentialSetupError = ""
         apiKeyDraft = pendingApiKey
         updateCredentialSetupVisibility(true)
+    }
+
+    private fun openSettingsPage() {
+        dismissKeyboard()
+        attachmentMenuVisible = false
+        settingsPageVisible = true
+        if (pageData.isAndroid || pageData.isIOS) {
+            bridgeModule.setSystemBarsDimmed(true)
+        }
+    }
+
+    private fun closeSettingsPage() {
+        settingsPageVisible = false
+        if (pageData.isAndroid || pageData.isIOS) {
+            bridgeModule.setSystemBarsDimmed(false)
+        }
     }
 
     private fun openConnectionSettings(preserveError: Boolean = false) {
