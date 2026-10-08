@@ -2,6 +2,7 @@ package com.example.dsh.dsh
 
 import com.example.dsh.base.BasePager
 import com.tencent.kuikly.core.annotations.Page
+import com.tencent.kuikly.core.base.BackPressCallback
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.Color
@@ -27,6 +28,12 @@ internal class DshWebViewPage : BasePager() {
 
     override fun created() {
         super.created()
+        // 链接页没有覆盖层，系统返回键直接结束当前页面。
+        getBackPressHandler().addCallback(object : BackPressCallback() {
+            override fun handleOnBackPressed() {
+                acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+            }
+        })
         url = pageData.params.optString("url").trim()
         if (url.isEmpty()) status = "链接为空"
     }

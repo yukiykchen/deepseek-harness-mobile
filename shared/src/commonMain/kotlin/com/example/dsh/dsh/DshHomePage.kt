@@ -181,6 +181,32 @@ internal class DshHomePage : BasePager() {
     private var questionError by observable("")
     private val questionDrafts = mutableMapOf<Int, DshQuestionDraft>()
 
+    /**
+     * 系统返回键统一入口：按 z-order 关闭最顶层覆盖层，
+     * 所有覆盖层都关闭后再通过 RouterModule.closePage() 结束当前页面。
+     */
+    internal val overlayBackCallback = object : BackPressCallback() {
+        override fun handleOnBackPressed() {
+            when {
+                workspaceDeleteTargetId.isNotEmpty() -> {
+                    workspaceDeleteTargetId = ""
+                    workspaceActionError = ""
+                }
+                workspaceRenameTargetId.isNotEmpty() -> {
+                    workspaceRenameTargetId = ""
+                    workspaceActionError = ""
+                }
+                workspaceBrowserVisible -> workspaceBrowserVisible = false
+                sshSettingsVisible -> updateSshSettingsVisibility(false)
+                credentialSetupVisible -> closeCredentialSettings()
+                modelPickerVisible -> modelPickerVisible = false
+                attachmentMenuVisible -> attachmentMenuVisible = false
+                sessionDrawerVisible -> closeSessionDrawer()
+                else -> acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+            }
+        }
+    }
+
     override fun created() {
         super.created()
         val startedAt = TimeSource.Monotonic.markNow()
@@ -212,6 +238,7 @@ internal class DshHomePage : BasePager() {
             warmRecentSessionCache(scrollToEndAfterLoad = false)
         }
         setTimeout(pagerId, 0) { startConnection() }
+        getBackPressHandler().addCallback(overlayBackCallback)
         perfLog("startup.created.end", startedAt)
     }
 

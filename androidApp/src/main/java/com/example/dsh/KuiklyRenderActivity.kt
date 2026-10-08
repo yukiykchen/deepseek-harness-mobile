@@ -59,6 +59,16 @@ class KuiklyRenderActivity : AppCompatActivity(), KuiklyRenderViewBaseDelegatorD
 
     override fun softInputMode(): Int? = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
 
+    override fun onBackPressed() {
+        // 将系统返回键转发给 Kuikly 页面引擎处理。
+        // 页面通过 BackPressCallback 决定行为：按 z-order 关闭最顶层覆盖层
+        // （抽屉/弹窗/设置页等），或在无覆盖层时通过
+        // RouterModule.closePage() 结束 Activity。
+        // 不调用 super.onBackPressed()：默认行为会直接 finish Activity，
+        // 绕过页面层的返回键拦截。
+        kuiklyRenderViewDelegator.onBackPressed()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         kuiklyRenderViewDelegator.onDetach()
