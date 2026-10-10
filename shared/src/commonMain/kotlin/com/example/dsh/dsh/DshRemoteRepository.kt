@@ -188,9 +188,6 @@ internal class DshRemoteRepository(
     override fun createSession(workspaceId: String?, onSuccess: (String) -> Unit, onError: (String) -> Unit) =
         delegate.createSession(workspaceId, onSuccess, onError)
 
-    override fun loadHistory(sessionId: String, onSuccess: (List<DshMessage>) -> Unit, onError: (String) -> Unit) =
-        delegate.loadHistory(sessionId, onSuccess, onError)
-
     fun streamReply(
         pagerId: String,
         sessionId: String,

@@ -589,11 +589,6 @@ internal interface DshRepository {
         onError: (String) -> Unit,
     )
 
-    fun loadHistory(
-        sessionId: String,
-        onSuccess: (List<DshMessage>) -> Unit,
-        onError: (String) -> Unit,
-    )
     fun streamReply(
         pagerId: String,
         sessionId: String,
