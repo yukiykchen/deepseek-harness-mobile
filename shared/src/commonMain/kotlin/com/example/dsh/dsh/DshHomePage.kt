@@ -5,7 +5,6 @@ import com.example.dsh.base.bridgeModule
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.*
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.log.KLog
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.reactive.collection.ObservableList
@@ -28,7 +27,7 @@ private const val CONVERSATION_PANEL_CACHE_LIMIT = 8
 @Page("home")
 internal class DshHomePage : BasePager(), DshHomeContext {
     private var localStore: DshLocalStore? = null
-    private val connection = DshConnectionController(
+    private val connection: DshConnectionController = DshConnectionController(
         scope = this,
         localStore = { localStore },
         supportsRelay = { pageData.supportsRelayBridge },
@@ -69,9 +68,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         private set
     private var preferBlankHomeOnNextLoad = true
     private var draft by observable("")
-    private var streaming by observable(false)
-    private var stopButtonVisible by observable(false)
-    private var streamingAssistantContent by observable("")
     private var keyboardHeight by observable(0f)
     private var keyboardAnimation by observable(Animation.easeInOut(ANIMATION_DURATION_S))
     private var sessionDrawerVisible by observable(false)
@@ -82,22 +78,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private var voiceActive by observable(false)
     private var topBarRef: ViewRef<com.tencent.kuikly.core.views.DivView>? = null
     private var inputView: TextAreaView? = null
-    private var streamHandle: DshStreamHandle? = null
     private var historyRequestGeneration = 0
     private val pendingSessionSelections = mutableSetOf<String>()
     private var inputFocused = false
-    private var streamingAssistantId by observable("")
-    // The root id guards callbacks from an old request; the visible id points
-    // at the current text segment between ordered tool cards.
-    private var streamingAssistantRootId = ""
-    private var streamingAssistantSegment = 0
-    // Last completed assistant when the current prompt was sent. Resync must
-    // not graft the new stream onto that bubble.
-    private var streamingTurnAnchorAssistantId = ""
-    private var streamingReasoningId = ""
-    private var streamingReasoningContent = ""
-    private val pendingAssistantDelta = StringBuilder()
-    private var assistantFlushScheduled = false
     private var perfTraceSequence = 0
     private val queue = DshQueueController(this)
     private val jobs = DshJobsController(this)
@@ -122,7 +105,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             loadRepository()
         },
     )
-    private val turnStatus = DshTurnStatusTicker(this) { streaming || stopButtonVisible || sessionRunning }
+    private val turnStatus: DshTurnStatusTicker = DshTurnStatusTicker(this) { turn.streaming || turn.stopButtonVisible || sessionRunning }
     private val sessionStore = DshSessionMessageStore(
         scope = this,
         localStore = { localStore },
@@ -140,7 +123,20 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             override fun onReady(sessionId: String) = completePendingSessionSelection(sessionId)
         },
     )
-    private val scroller = DshConversationScroller(this, { messages }, { streamingAssistantId })
+    private val scroller: DshConversationScroller = DshConversationScroller(this, { messages }, { turn.liveId })
+    private val turn: DshStreamingTurnController = DshStreamingTurnController(
+        ctx = this,
+        messages = { messages },
+        scroller = scroller,
+        listener = object : DshStreamingTurnController.Listener {
+            override fun isConnectionActive() = connection.isActive()
+            override fun onStatusLabel(label: String) {
+                connectionLabel = label
+            }
+            override fun onActivityChanged() = turnStatus.sync()
+            override fun persist(sessionId: String) = sessionStore.persist(sessionId, messages)
+        },
+    )
     private val disclosures = DshDisclosureStore(this) { scroller.refresh(activeSessionId) }
     private val attachments = DshAttachmentCache(this) { sessionId ->
         val next = sessionStore.state(sessionId).toList()
@@ -417,16 +413,16 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             conversationIds = { ctx.conversationPanelIds },
             activeConversationId = { ctx.activeSessionId },
             messagesForSession = { ctx.sessionStore.state(it) },
-            streaming = { ctx.streaming },
-            streamingMessageId = { ctx.streamingAssistantId },
-            streamingContent = { ctx.streamingAssistantContent },
+            streaming = { ctx.turn.streaming },
+            streamingMessageId = { ctx.turn.liveId },
+            streamingContent = { ctx.turn.liveContent },
             scrollerRef = { id, ref -> ctx.scroller.bindScroller(id, ref) },
             messageRef = { sessionId, messageId, ref -> ctx.scroller.bindRow(sessionId, messageId, ref) },
             draft = { ctx.draft },
             skills = { ctx.skills },
             onPickSkill = { ctx.draft = "/$it " },
             keyboardHeight = { ctx.keyboardHeight },
-            stopButtonVisible = { ctx.stopButtonVisible },
+            stopButtonVisible = { ctx.turn.stopButtonVisible },
             inputRef = { ctx.inputView = it.view },
             onInputFocusChange = { ctx.inputFocused = it },
             onDraftChange = { ctx.draft = it },
@@ -557,7 +553,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 interactions.refresh()
                 models.load(activeSessionId)
                 loadHistory(activeSessionId, scrollToEndAfterLoad = false)
-                if (streaming || stopButtonVisible || sessionRunning) {
+                if (turn.streaming || turn.stopButtonVisible || sessionRunning) {
                     resyncStreamingWithHost(activeSessionId, "session-list")
                 }
             } else {
@@ -665,8 +661,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private fun stopCurrentEngine() {
         connection.stop()
         goal.reset()
-        streamHandle?.cancel()
-        streamHandle = null
+        turn.detach()
     }
 
     private fun openConnectionSetup() {
@@ -796,8 +791,8 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             afterApply()
         }, { error ->
             DshStreamLog.i("ui.history-fail session=$sessionId error='${DshStreamLog.preview(error)}'")
-            if (forceReplace && !sessionRunning && (streaming || stopButtonVisible)) {
-                finishStreamingFromHistory(sessionId)
+            if (forceReplace && !sessionRunning && (turn.streaming || turn.stopButtonVisible)) {
+                turn.finishFromHistory(sessionId)
             }
             afterApply()
         })
@@ -806,143 +801,28 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private fun resyncStreamingWithHost(sessionId: String, reason: String) {
         if (sessionId != activeSessionId) return
         DshStreamLog.i(
-            "ui.resync.begin reason=$reason session=$sessionId running=$sessionRunning streaming=$streaming stop=$stopButtonVisible",
+            "ui.resync.begin reason=$reason session=$sessionId running=$sessionRunning streaming=${turn.streaming} stop=${turn.stopButtonVisible}",
         )
         // A local prompt is already painting this turn. Reloading the web
         // timeline remounts every markdown bubble and delays the first token.
-        if (reason == "host-session-running" && isLocalPromptInFlight()) {
+        if (reason == "host-session-running" && turn.isLocalPromptInFlight()) {
             DshStreamLog.i(
-                "ui.resync.skip-local-stream reason=$reason session=$sessionId root=$streamingAssistantRootId",
+                "ui.resync.skip-local-stream reason=$reason session=$sessionId live=${turn.liveId}",
             )
             return
         }
         if (sessionRunning) {
             loadWebTimeline(sessionId, scrollToEndAfterLoad = true, forceReplace = true) {
-                resumeStreamingFromHistory(sessionId, reason)
+                turn.resumeFromHistory(sessionId, reason)
             }
         } else {
-            val forceReplace = streaming || stopButtonVisible
+            val forceReplace = turn.streaming || turn.stopButtonVisible
             loadWebTimeline(sessionId, scrollToEndAfterLoad = true, forceReplace = forceReplace) {
-                finishStreamingFromHistory(sessionId)
+                turn.finishFromHistory(sessionId)
                 connectionLabel = "已连接"
                 DshStreamLog.i("ui.resync.settled reason=$reason session=$sessionId messages=${messages.size}")
             }
         }
-    }
-
-    private fun isLocalPromptInFlight(): Boolean =
-        streaming && streamingAssistantRootId.isNotEmpty()
-
-    private fun rebindStreamingToHistoryTail(): Boolean {
-        val live = dshHistoryTailToResume(messages.toList(), streamingTurnAnchorAssistantId)
-            ?: return false
-        streamingAssistantId = live.id
-        streamingAssistantRootId = live.id
-        streamingAssistantSegment = 0
-        streamingAssistantContent = live.content
-        return true
-    }
-
-    private fun finishStreamingFromHistory(sessionId: String) {
-        if (!(streaming || stopButtonVisible)) return
-        flushAssistantDelta()
-        if (rebindStreamingToHistoryTail()) {
-            settleStreamingMessage(DshMessageRole.ASSISTANT, streamingAssistantContent)
-        } else {
-            releaseStreamingUi()
-        }
-        sessionStore.persist(sessionId, messages)
-        hostClient?.detachLiveStreams(sessionId)
-        streamHandle = null
-    }
-
-    private fun resumeStreamingFromHistory(sessionId: String, reason: String) {
-        if (sessionId != activeSessionId) return
-        val rebound = rebindStreamingToHistoryTail()
-        if (rebound) {
-            streaming = true
-            stopButtonVisible = true
-            connectionLabel = "正在生成"
-            val index = messages.indexOfFirst { it.id == streamingAssistantId }
-            if (index >= 0) {
-                messages[index] = messages[index].copy(streaming = true)
-            }
-        } else {
-            if (streamingAssistantRootId.isEmpty()) {
-                streamingAssistantRootId = "assistant-adopted-${messages.size}"
-            }
-            val liveStillPresent = streamingAssistantId.isNotEmpty() &&
-                messages.any { it.id == streamingAssistantId }
-            if (!liveStillPresent) {
-                val kept = streamingAssistantContent + pendingAssistantDelta.toString()
-                pendingAssistantDelta.setLength(0)
-                streamingAssistantId = ""
-                streamingAssistantSegment = 0
-                streamingAssistantContent = ""
-                if (kept.isNotEmpty()) {
-                    ensureStreamingAssistantSegment()
-                    streamingAssistantContent = kept
-                    updateStreamingMessage(kept, streaming = true)
-                }
-            }
-            streaming = true
-            stopButtonVisible = true
-            connectionLabel = "正在生成"
-        }
-        attachAdoptedLiveStream(sessionId)
-        turnStatus.sync()
-        DshStreamLog.i(
-            "ui.resync.resume reason=$reason rebound=$rebound id=${streamingAssistantId.ifEmpty { streamingAssistantRootId }} chars=${streamingAssistantContent.length}",
-        )
-    }
-
-    private fun attachAdoptedLiveStream(sessionId: String) {
-        val hostRepository = hostClient ?: return
-        streamHandle = hostRepository.adoptLiveStream(
-            sessionId = sessionId,
-            onDelta = { delta, isReasoning ->
-                if (!connection.isActive() || activeSessionId != sessionId) return@adoptLiveStream
-                if (isReasoning) {
-                    val reasoningId = streamingReasoningId.ifEmpty { "$streamingAssistantRootId-reasoning" }
-                    if (streamingReasoningId.isEmpty()) streamingReasoningId = reasoningId
-                    queueReasoningDelta(reasoningId, delta)
-                } else {
-                    if (streamingAssistantRootId.isEmpty()) {
-                        streamingAssistantRootId = "assistant-adopted-${messages.size}"
-                    }
-                    queueAssistantDelta(streamingAssistantRootId, delta)
-                }
-            },
-            onComplete = { result ->
-                if (!connection.isActive()) return@adoptLiveStream
-                flushAssistantDelta()
-                if (streamingAssistantId.isEmpty() && result.isNotEmpty()) {
-                    ensureStreamingAssistantSegment()
-                }
-                val completedContent = streamingAssistantContent.ifEmpty { result }
-                DshStreamLog.i(
-                    "ui.complete session=$sessionId resultChars=${result.length} liveChars=${streamingAssistantContent.length} preview='${DshStreamLog.preview(completedContent)}'",
-                )
-                settleStreamingMessage(DshMessageRole.ASSISTANT, completedContent)
-                sessionStore.persist(sessionId, messages)
-                connectionLabel = "已连接"
-                streamHandle = null
-            },
-            onError = { error ->
-                if (!connection.isActive()) return@adoptLiveStream
-                if (dshIsTransportInterrupt("", error)) {
-                    DshStreamLog.i("ui.adopt-interrupt session=$sessionId message='${DshStreamLog.preview(error)}'")
-                    return@adoptLiveStream
-                }
-                flushAssistantDelta()
-                ensureStreamingAssistantSegment()
-                DshStreamLog.i("ui.error session=$sessionId message='${DshStreamLog.preview(error)}'")
-                settleStreamingMessage(DshMessageRole.ERROR, error)
-                sessionStore.persist(sessionId, messages)
-                connectionLabel = "已连接"
-                streamHandle = null
-            },
-        )
     }
 
     private fun loadSkills(sessionId: String) {
@@ -963,7 +843,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // The Host emits tool/call after the assistant block that introduced
         // it. Seal that block before appending its card so the list follows the
         // actual event order instead of grouping all cards at the turn end.
-        splitStreamingAssistantBeforeTool()
+        turn.splitBeforeTool()
         messages.add(model.toRemoteMessage(id))
         scroller.refresh(activeSessionId)
         scroller.scrollToEnd()
@@ -1102,7 +982,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         if (id == activeSessionId) return
         dshPerfLog("switch.$traceId.mounted.begin", startedAt)
         scroller.refresh(id)
-        cancelStreamingForSessionSwitch()
+        turn.cancelForSessionSwitch()
         sessionStore.put(activeSessionId, messages)
         val nextMessages = sessionStore.state(id, loadFromDisk = false)
         ensureConversationPanel(id)
@@ -1143,10 +1023,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
 
     private fun refreshMountedSessionRenderTrees() {
         conversationPanelIds.toList().forEach { scroller.refresh(it) }
-    }
-
-    private fun sessionRenderLog(message: String) {
-        KLog.i("DshSessionRender", "[DshSessionRender] $message")
     }
 
     private fun realizeSessionAfterData(
@@ -1215,7 +1091,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private fun sendDraft() {
         dismissKeyboard()
         val prompt = draft.trim()
-        if (prompt.isEmpty() || streaming) return
+        if (prompt.isEmpty() || turn.streaming) return
         val hostRepository = hostClient
         if (hostRepository == null) {
             connectionLabel = "本地内核尚未连接"
@@ -1252,7 +1128,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val sessionId = activeSessionId
         val user = DshMessage("user-${messages.size}", DshMessageRole.USER, prompt)
         val assistantId = "assistant-${messages.size}"
-        val reasoningId = "$assistantId-reasoning"
         val wasEmpty = messages.isEmpty()
         messages.add(user)
         // DSH ChatView keeps the assistant node out of the flow until the
@@ -1262,101 +1137,15 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         if (wasEmpty) sessionStore.remount(sessionId)
         scroller.pinTail()
         scroller.scrollToMessage(user.id)
-        streamingTurnAnchorAssistantId = messages.lastOrNull(::dshIsLiveAssistantText)?.id.orEmpty()
-        streamingAssistantId = ""
-        streamingAssistantRootId = assistantId
-        streamingAssistantSegment = 0
-        streamingReasoningId = reasoningId
-        streamingReasoningContent = ""
-        streamingAssistantContent = ""
-        pendingAssistantDelta.setLength(0)
-        assistantFlushScheduled = false
         draft = ""
         inputView?.setText("")
-        streaming = true
-        stopButtonVisible = true
-        connectionLabel = "正在生成"
-        turnStatus.sync()
-        streamHandle = hostRepository.streamReply(
-            pagerId = pagerId,
-            sessionId = sessionId,
-            prompt = prompt,
-            onDelta = { delta, isReasoning ->
-                if (isReasoning) queueReasoningDelta(reasoningId, delta)
-                else queueAssistantDelta(assistantId, delta)
-            },
-            onComplete = { result ->
-                if (!connection.isActive()) return@streamReply
-                flushAssistantDelta()
-                if (streamingAssistantId.isEmpty() && result.isNotEmpty()) {
-                    ensureStreamingAssistantSegment()
-                }
-                // A turn may contain several assistant text blocks separated by
-                // tool calls. The current segment already contains the final
-                // block; using the turn-wide accumulator here would move all
-                // earlier text back into this last row.
-                val completedContent = streamingAssistantContent.ifEmpty { result }
-                DshStreamLog.i(
-                    "ui.complete session=$sessionId resultChars=${result.length} liveChars=${streamingAssistantContent.length} preview='${DshStreamLog.preview(completedContent)}'",
-                )
-                settleStreamingMessage(DshMessageRole.ASSISTANT, completedContent)
-                sessionStore.persist(sessionId, messages)
-                connectionLabel = "已连接"
-                streamHandle = null
-            },
-            onError = { error ->
-                if (!connection.isActive()) return@streamReply
-                if (dshIsTransportInterrupt("", error)) {
-                    DshStreamLog.i("ui.prompt-interrupt session=$sessionId message='${DshStreamLog.preview(error)}'")
-                    return@streamReply
-                }
-                flushAssistantDelta()
-                ensureStreamingAssistantSegment()
-                DshStreamLog.i("ui.error session=$sessionId message='${DshStreamLog.preview(error)}'")
-                settleStreamingMessage(DshMessageRole.ERROR, error)
-                sessionStore.persist(sessionId, messages)
-                connectionLabel = "已连接"
-                streamHandle = null
-            },
-        )
+        turn.send(hostRepository, sessionId, prompt, assistantId)
     }
 
     private fun stopStream() {
-        if (!stopButtonVisible) return
+        if (!turn.stopButtonVisible) return
         dismissKeyboard()
-        streamHandle?.cancel()
-        streamHandle = null
-        flushAssistantDelta()
-        ensureStreamingAssistantSegment()
-        val stoppedContent = streamingAssistantContent + "\n\n*已停止*"
-        sessionRenderLog("stream.stop.begin session=$activeSessionId messages=${messages.size} chars=${stoppedContent.length}")
-        settleStreamingMessage(DshMessageRole.ASSISTANT, stoppedContent)
-        sessionStore.persist(activeSessionId, messages)
-        connectionLabel = "已连接"
-        sessionRenderLog("stream.stop.state-finalized session=$activeSessionId messages=${messages.size}")
-    }
-
-    private fun cancelStreamingForSessionSwitch() {
-        if (!streaming && !stopButtonVisible) return
-        streamHandle?.cancel()
-        streamHandle = null
-        val partial = streamingAssistantContent + pendingAssistantDelta.toString()
-        if (streamingAssistantId.isNotEmpty()) {
-            updateStreamingMessage(partial, streaming = false)
-        }
-        finalizeStreamingReasoning()
-        streamingAssistantId = ""
-        streamingAssistantRootId = ""
-        streamingAssistantSegment = 0
-        streamingReasoningId = ""
-        streamingReasoningContent = ""
-        pendingAssistantDelta.setLength(0)
-        streamingAssistantContent = ""
-        assistantFlushScheduled = false
-        streamingTurnAnchorAssistantId = ""
-        streaming = false
-        stopButtonVisible = false
-        turnStatus.sync()
+        turn.stop()
     }
 
     private fun dismissKeyboard() {
@@ -1373,7 +1162,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // Closing the keyboard after send must not undo the scroll to the
         // newly sent user message. Scroll to the end only when the composer
         // is opening while no response is being anchored.
-        if (keyboardHeight > 0f && !streaming) scroller.scrollToEnd()
+        if (keyboardHeight > 0f && !turn.streaming) scroller.scrollToEnd()
     }
 
     private fun effectiveKeyboardHeight(rawHeight: Float): Float {
@@ -1402,205 +1191,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         connectionLabel = if (voiceActive) "正在聆听" else "已连接"
     }
 
-    private fun queueAssistantDelta(id: String, delta: String) {
-        if (delta.isEmpty()) return
-        if (!streaming || streamingAssistantRootId != id) return
-        ensureStreamingAssistantSegment()
-        pendingAssistantDelta.append(delta)
-        val firstPaint = streamingAssistantContent.isEmpty()
-        if (assistantFlushScheduled && !firstPaint) return
-        assistantFlushScheduled = true
-        setTimeout(pagerId, if (firstPaint) 0 else STREAM_FLUSH_INTERVAL_MS) {
-            assistantFlushScheduled = false
-            flushAssistantDelta()
-        }
-    }
-
-    private fun queueReasoningDelta(id: String, delta: String) {
-        if (delta.isEmpty() || streamingReasoningId != id) return
-        streamingReasoningContent += delta
-        val index = messages.indexOfFirst { it.id == id }
-        if (index >= 0) {
-            messages[index] = messages[index].copy(
-                content = streamingReasoningContent,
-                streaming = true,
-                isReasoning = true,
-            )
-        } else {
-            messages.add(DshMessage(id, DshMessageRole.ASSISTANT, streamingReasoningContent, streaming = true, isReasoning = true))
-        }
-        scroller.realizeVisible()
-        scroller.scrollToEnd()
-    }
-
-    private fun flushAssistantDelta() {
-        if (streamingAssistantId.isEmpty() || pendingAssistantDelta.isEmpty()) return
-        streamingAssistantContent += pendingAssistantDelta.toString()
-        pendingAssistantDelta.setLength(0)
-        DshStreamLog.i(
-            "ui.flush id=$streamingAssistantId chars=${streamingAssistantContent.length} preview='${DshStreamLog.preview(streamingAssistantContent)}'",
-        )
-        // Keep the ObservableList row stable while tokens arrive. `messages[i] =
-        // copy()` is remove+add; LazyLoop treats an append at currentEnd as
-        // "behind the visible range" and will not build the cell until scroll.
-        // DshMarkdown already reads `streamingAssistantContent` via liveContent.
-        insertLiveAssistantRow()
-        scroller.ensureLiveCell()
-        scroller.refresh(activeSessionId)
-        scroller.scrollToEnd()
-    }
-
-    /**
-     * A live assistant response is an ordered sequence of text segments and
-     * tool cards. Start a new row lazily after a tool card so the next delta is
-     * placed after that card instead of being appended to the old row.
-     */
-    private fun ensureStreamingAssistantSegment() {
-        if (streamingAssistantId.isNotEmpty()) return
-        if (streamingAssistantRootId.isEmpty()) return
-        val id = if (streamingAssistantSegment == 0) {
-            streamingAssistantRootId
-        } else {
-            "$streamingAssistantRootId-segment-${streamingAssistantSegment}"
-        }
-        streamingAssistantId = id
-        if (streamingAssistantContent.isEmpty() && pendingAssistantDelta.isEmpty()) {
-            // Inserting an empty assistant into a brand-new List (only the user
-            // bubble) is "add behind currentEnd". LazyLoop will not build that
-            // cell until a real scroll, and DshMessageRow also skips mounting
-            // Markdown when the first paint is empty. Wait for the first flush.
-            return
-        }
-        insertLiveAssistantRow()
-    }
-
-    private fun insertLiveAssistantRow() {
-        val id = streamingAssistantId
-        if (id.isEmpty() || messages.any { it.id == id }) return
-        // Keep content empty until settle. The first-flush snapshot must not
-        // become the display source; DshMarkdown reads the live buffer.
-        messages.add(DshMessage(id, DshMessageRole.ASSISTANT, "", streaming = true))
-        scroller.ensureLiveCell()
-    }
-
-    /** Close the current text row immediately before the next tool card. */
-    private fun splitStreamingAssistantBeforeTool() {
-        if (!streaming || streamingAssistantRootId.isEmpty()) return
-        flushAssistantDelta()
-        val id = streamingAssistantId
-        if (id.isNotEmpty()) {
-            val index = messages.indexOfFirst { it.id == id }
-            if (index >= 0) {
-                val current = messages[index]
-                val text = current.content.ifEmpty { streamingAssistantContent }
-                if (text.isEmpty()) {
-                    messages.removeAt(index)
-                } else {
-                    messages[index] = current.copy(content = text, streaming = false)
-                    scroller.realizeVisible()
-                }
-            }
-        }
-        streamingAssistantId = ""
-        streamingAssistantContent = ""
-        streamingAssistantSegment += 1
-        pendingAssistantDelta.setLength(0)
-        assistantFlushScheduled = false
-    }
-
-    private fun updateStreamingMessage(content: String, streaming: Boolean, isReasoning: Boolean = false) {
-        val index = messages.indexOfFirst { it.id == streamingAssistantId }
-        if (index < 0) return
-        messages[index] = messages[index].copy(
-            content = content,
-            streaming = streaming,
-            isReasoning = isReasoning,
-        )
-        if (index >= messages.size - 1) scroller.realizeVisible()
-    }
-
-    private fun finalizeStreamingReasoning() {
-        if (streamingReasoningId.isEmpty()) return
-        val index = messages.indexOfFirst { it.id == streamingReasoningId }
-        if (index >= 0) {
-            messages[index] = messages[index].copy(streaming = false, isReasoning = true)
-        }
-    }
-
-    private fun settleStreamingMessage(role: DshMessageRole, content: String) {
-        val id = streamingAssistantId
-        if (id.isNotEmpty()) {
-            val sessionId = activeSessionId
-            val finalContent = content.ifEmpty { streamingAssistantContent }
-            finalizeStreamingReasoning()
-            val index = messages.indexOfFirst { it.id == id }
-            if (index >= 0) {
-                messages[index] = messages[index].copy(
-                    role = role,
-                    content = finalContent,
-                    streaming = false,
-                )
-            } else {
-                messages.add(DshMessage(id, role, finalContent, streaming = false))
-            }
-            scroller.realizeVisible()
-            DshStreamLog.i(
-                "ui.settle id=$id role=$role index=$index chars=${finalContent.length} preview='${DshStreamLog.preview(finalContent)}'",
-            )
-            streamingReasoningId = ""
-            streamingReasoningContent = ""
-            pendingAssistantDelta.setLength(0)
-            stopButtonVisible = false
-            streaming = false
-            streamingAssistantContent = finalContent
-            turnStatus.sync()
-            addTaskWhenPagerUpdateLayoutFinish {
-                if (activeSessionId != sessionId) return@addTaskWhenPagerUpdateLayoutFinish
-                if (!streaming && streamingAssistantId == id) {
-                    val stored = messages.firstOrNull { it.id == id }?.content.orEmpty()
-                    if (stored.length >= finalContent.length) {
-                        streamingAssistantId = ""
-                        streamingAssistantRootId = ""
-                        streamingAssistantSegment = 0
-                        streamingTurnAnchorAssistantId = ""
-                        if (streamingAssistantContent == finalContent) {
-                            streamingAssistantContent = ""
-                        }
-                    }
-                }
-                scroller.refresh(sessionId)
-                sessionRenderLog("stream.render.layout session=$sessionId messages=${messages.size}")
-                setTimeout(pagerId, 16) {
-                    if (activeSessionId != sessionId) return@setTimeout
-                    addTaskWhenPagerUpdateLayoutFinish {
-                        if (activeSessionId != sessionId) return@addTaskWhenPagerUpdateLayoutFinish
-                        scroller.refresh(sessionId)
-                        sessionRenderLog("stream.render.refresh session=$sessionId messages=${messages.size}")
-                    }
-                }
-            }
-            return
-        }
-        releaseStreamingUi()
-    }
-
-    private fun releaseStreamingUi() {
-        streamingAssistantId = ""
-        streamingAssistantRootId = ""
-        streamingAssistantSegment = 0
-        streamingTurnAnchorAssistantId = ""
-        streamingReasoningId = ""
-        streamingReasoningContent = ""
-        pendingAssistantDelta.setLength(0)
-        streaming = false
-        stopButtonVisible = false
-        streamingAssistantContent = ""
-        turnStatus.sync()
-    }
-
     private fun replaceMessagesIfChanged(next: List<DshMessage>, force: Boolean = false) {
         val filtered = next.filterNot { it.isRuntimeContextSnapshot() }
-        if (streaming && !force) {
+        if (turn.streaming && !force) {
             // History is a snapshot that can arrive while the current turn is
             // still being projected. Replacing the observable list here drops
             // optimistic text segments and their in-order tool cards.
@@ -1619,7 +1212,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         }
         val remount = current.isEmpty() && filtered.isNotEmpty()
         DshStreamLog.i(
-            "ui.replace-messages from=${current.size} to=${filtered.size} streaming=$streaming force=$force remount=$remount preview='${DshStreamLog.preview(filtered.lastOrNull()?.content.orEmpty())}'",
+            "ui.replace-messages from=${current.size} to=${filtered.size} streaming=${turn.streaming} force=$force remount=$remount preview='${DshStreamLog.preview(filtered.lastOrNull()?.content.orEmpty())}'",
         )
         applyMessagesInPlace(filtered)
         sessionStore.put(activeSessionId, messages)
@@ -1647,6 +1240,5 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         private const val BG = 0xFFF7F9FA
         private const val ANIMATION_DURATION_MS = 240
         private const val ANIMATION_DURATION_S = 0.24f
-        private const val STREAM_FLUSH_INTERVAL_MS = 16
     }
 }

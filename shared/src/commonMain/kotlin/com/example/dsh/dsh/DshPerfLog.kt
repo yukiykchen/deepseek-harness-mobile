@@ -14,3 +14,7 @@ internal fun dshPerfLog(stage: String, startedAt: TimeMark? = null) {
     val elapsed = startedAt?.elapsedNow()?.inWholeMilliseconds?.let { " +${it}ms" } ?: ""
     KLog.i("DshPerf", "[DshPerf] $stage$elapsed")
 }
+
+internal fun dshSessionRenderLog(message: String) {
+    KLog.i("DshSessionRender", "[DshSessionRender] $message")
+}
