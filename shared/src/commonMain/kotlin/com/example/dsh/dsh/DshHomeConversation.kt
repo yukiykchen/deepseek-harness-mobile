@@ -156,47 +156,15 @@ internal fun ViewContainer<*, *>.DshConversation(
     onToggleJsonNode: (String, String) -> Unit,
     onCopyToolContent: (String) -> Unit,
     attachmentDataUrl: (String) -> String?,
-    queueItems: () -> ObservableList<DshQueueItem>,
-    jobItems: () -> ObservableList<DshJobItem>,
-    goal: () -> DshGoalSnapshot?,
-    goalActionBusy: () -> Boolean,
-    goalActionError: () -> String,
-    onPauseGoal: () -> Unit,
-    onResumeGoal: () -> Unit,
-    onEditGoal: (String, (Boolean) -> Unit) -> Unit,
-    onClearGoal: () -> Unit,
-    jobsPanelExpanded: () -> Boolean,
-    jobsNow: () -> Long,
-    onToggleJobsPanel: () -> Unit,
-    queueExpanded: () -> Boolean,
-    queueEditingId: () -> String,
-    queueActionBusy: () -> Boolean,
-    queueEditingText: () -> String,
+    queue: DshQueueController,
+    jobs: DshJobsController,
+    goal: DshGoalController,
+    interactions: DshInteractionController,
     sessionRunning: () -> Boolean,
     isBlankConversation: () -> Boolean,
     conversationListEpoch: (String) -> Int,
     turnReconnecting: () -> Boolean,
     turnElapsedMs: () -> Long,
-    onToggleQueue: () -> Unit,
-    onEditQueueItem: (String) -> Unit,
-    onQueueEditingTextChange: (String) -> Unit,
-    onSaveQueueItem: (String) -> Unit,
-    onCancelQueueItemEdit: () -> Unit,
-    onRemoveQueueItem: (String) -> Unit,
-    onSteerQueueItem: (String) -> Unit,
-    pendingApproval: () -> DshPendingApproval?,
-    pendingQuestion: () -> DshPendingQuestion?,
-    interactionBusy: () -> Boolean,
-    selectedQuestionOptions: () -> ObservableList<String>,
-    questionCustom: () -> String,
-    questionIndex: () -> Int,
-    questionError: () -> String,
-    onAnswerApproval: (String) -> Unit,
-    onToggleQuestionOption: (String) -> Unit,
-    onQuestionCustomChange: (String) -> Unit,
-    onQuestionNavigate: (Int) -> Unit,
-    onQuestionSkip: () -> Unit,
-    onSubmitQuestion: () -> Unit,
     availableWidth: Float,
 ) {
     View {
@@ -328,80 +296,14 @@ internal fun ViewContainer<*, *>.DshConversation(
                 DshNewSessionHome()
             }
         }
-        vif({ queueItems().isNotEmpty() }) {
-            DshQueueDock {
-                attr {
-                    items = queueItems()
-                    expanded = queueExpanded()
-                    editingId = queueEditingId()
-                    actionBusy = queueActionBusy()
-                    editingText = queueEditingText()
-                    running = sessionRunning()
-                    onToggle = onToggleQueue
-                    onEdit = onEditQueueItem
-                    onEditingTextChange = onQueueEditingTextChange
-                    onSaveEdit = onSaveQueueItem
-                    onCancelEdit = onCancelQueueItemEdit
-                    onRemove = onRemoveQueueItem
-                    onSteer = onSteerQueueItem
-                }
-            }
-        }
-        vif({ jobItems().isNotEmpty() }) {
-            DshJobsPanel {
-                attr {
-                    jobs = jobItems()
-                    expanded = jobsPanelExpanded()
-                    now = jobsNow()
-                    onToggle = onToggleJobsPanel
-                }
-            }
-        }
-        vif({ goal() != null }) {
-            DshGoalBar {
-                attr {
-                    snapshot = goal()
-                    busy = goalActionBusy()
-                    error = goalActionError()
-                    onPause = onPauseGoal
-                    onResume = onResumeGoal
-                    onEdit = onEditGoal
-                    onClear = onClearGoal
-                }
-            }
-        }
-        vif({ pendingApproval()?.sessionId == activeConversationId() }) {
-            DshApprovalPanel {
-                attr {
-                    approval = pendingApproval()
-                    busy = interactionBusy()
-                    onAnswer = onAnswerApproval
-                }
-            }
-        }
-        vif({
-            pendingApproval() == null &&
-                pendingQuestion()?.sessionId == activeConversationId()
-        }) {
-            DshQuestionFlow {
-                attr {
-                    question = pendingQuestion()
-                    val options = ObservableList<DshPendingQuestionOption>()
-                    pendingQuestion()?.questions?.getOrNull(questionIndex())?.options?.let(options::addAll)
-                    this.options = options
-                    selected = selectedQuestionOptions()
-                    custom = questionCustom()
-                    index = questionIndex()
-                    error = questionError()
-                    busy = interactionBusy()
-                    onToggleOption = onToggleQuestionOption
-                    onCustomChange = onQuestionCustomChange
-                    onNavigate = onQuestionNavigate
-                    onSkip = onQuestionSkip
-                    onSubmit = onSubmitQuestion
-                }
-            }
-        }
+        DshSessionDocks(
+            queueCtl = queue,
+            jobsCtl = jobs,
+            goalCtl = goal,
+            interactionCtl = interactions,
+            activeConversationId = activeConversationId,
+            sessionRunning = sessionRunning,
+        )
             View {
                 attr {
                     width(availableWidth)
@@ -599,6 +501,94 @@ internal fun ViewContainer<*, *>.DshConversation(
                     }
                 }
             }
+            }
+        }
+    }
+}
+
+/**
+ * Panels stacked between the message list and the composer: prompt queue,
+ * background jobs, goal, and whatever approval / question the Agent waits on.
+ */
+private fun ViewContainer<*, *>.DshSessionDocks(
+    queueCtl: DshQueueController,
+    jobsCtl: DshJobsController,
+    goalCtl: DshGoalController,
+    interactionCtl: DshInteractionController,
+    activeConversationId: () -> String,
+    sessionRunning: () -> Boolean,
+) {
+    vif({ queueCtl.items.isNotEmpty() }) {
+        DshQueueDock {
+            attr {
+                items = queueCtl.items
+                expanded = queueCtl.expanded
+                editingId = queueCtl.editingId
+                actionBusy = queueCtl.actionBusy
+                editingText = queueCtl.editingText
+                running = sessionRunning()
+                onToggle = queueCtl::toggle
+                onEdit = queueCtl::edit
+                onEditingTextChange = queueCtl::updateEditingText
+                onSaveEdit = queueCtl::save
+                onCancelEdit = queueCtl::cancelEdit
+                onRemove = queueCtl::remove
+                onSteer = queueCtl::steer
+            }
+        }
+    }
+    vif({ jobsCtl.items.isNotEmpty() }) {
+        DshJobsPanel {
+            attr {
+                jobs = jobsCtl.items
+                expanded = jobsCtl.expanded
+                now = jobsCtl.now
+                onToggle = jobsCtl::toggle
+            }
+        }
+    }
+    vif({ goalCtl.snapshot != null }) {
+        DshGoalBar {
+            attr {
+                snapshot = goalCtl.snapshot
+                busy = goalCtl.busy
+                error = goalCtl.error
+                onPause = goalCtl::pause
+                onResume = goalCtl::resume
+                onEdit = goalCtl::edit
+                onClear = goalCtl::clear
+            }
+        }
+    }
+    vif({ interactionCtl.pendingApproval?.sessionId == activeConversationId() }) {
+        DshApprovalPanel {
+            attr {
+                approval = interactionCtl.pendingApproval
+                busy = interactionCtl.busy
+                onAnswer = interactionCtl::answerApproval
+            }
+        }
+    }
+    vif({
+        interactionCtl.pendingApproval == null &&
+            interactionCtl.pendingQuestion?.sessionId == activeConversationId()
+    }) {
+        DshQuestionFlow {
+            attr {
+                question = interactionCtl.pendingQuestion
+                val options = ObservableList<DshPendingQuestionOption>()
+                interactionCtl.pendingQuestion?.questions?.getOrNull(interactionCtl.index)?.options?.let(options::addAll)
+                this.options = options
+                selected = interactionCtl.selectedOptions
+                custom = interactionCtl.custom
+                index = interactionCtl.index
+                error = interactionCtl.error
+                busy = interactionCtl.busy
+                onToggleOption = interactionCtl::toggleOption
+                onCustomChange = interactionCtl::updateCustom
+                onNavigate = interactionCtl::navigate
+                onSkip = interactionCtl::skip
+                onSubmit = interactionCtl::submit
             }
         }
     }
