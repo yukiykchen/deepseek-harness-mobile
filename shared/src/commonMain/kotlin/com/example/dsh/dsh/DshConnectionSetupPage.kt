@@ -73,7 +73,6 @@ internal class DshConnectionSetupPage : BasePager() {
         }.getOrNull()
         val store = localStore
         connectionMode = runCatching { store?.loadLastConnectionMode() }.getOrNull()
-            ?.takeUnless { it == DshConnectionMode.LOCAL }
             ?: DshConnectionMode.RELAY
         val relay = runCatching { store?.loadRelayProfile() }.getOrNull()
         relayPaired = relay != null
@@ -190,7 +189,6 @@ internal class DshConnectionSetupPage : BasePager() {
                             titleAttr { text(when (ctx.connectionMode) {
                                 DshConnectionMode.SSH -> "保存并连接电脑"
                                 DshConnectionMode.RELAY -> if (ctx.relayPaired) "连接已配对电脑" else "请先扫码"
-                                DshConnectionMode.LOCAL -> "请改用 DSH Local"
                             }); fontSize(15f); color(Color.WHITE) }
                         }
                         event { click { if (!ctx.busy) ctx.continueToHost() } }
@@ -268,10 +266,6 @@ internal class DshConnectionSetupPage : BasePager() {
 
     private fun continueToHost() {
         fingerprintPending = ""
-        if (connectionMode == DshConnectionMode.LOCAL) {
-            error = "本地模式已独立为 DSH Local App"
-            return
-        }
         if (connectionMode == DshConnectionMode.RELAY) {
             if (!relayPaired) {
                 error = "请先扫描电脑二维码"
@@ -398,7 +392,6 @@ internal class DshConnectionSetupPage : BasePager() {
         acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage("home", JSONObject().apply {
             put("pageName", "home")
             put("connectionMode", when (connectionMode) {
-                DshConnectionMode.LOCAL -> "local"
                 DshConnectionMode.RELAY -> "relay"
                 DshConnectionMode.SSH -> "ssh"
             })

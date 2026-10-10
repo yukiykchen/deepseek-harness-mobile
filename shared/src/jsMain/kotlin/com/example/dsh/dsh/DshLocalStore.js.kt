@@ -3,8 +3,6 @@ package com.example.dsh.dsh
 internal actual fun createDshLocalStore(path: String, legacyProfile: DshLegacyRemoteProfile?): DshLocalStore = EmptyDshLocalStore
 
 private object EmptyDshLocalStore : DshLocalStore {
-    override fun loadApiKey(): String = ""
-    override fun saveApiKey(apiKey: String) = Unit
     override fun loadLastConnectionMode(): DshConnectionMode = DshConnectionMode.RELAY
     override fun saveLastConnectionMode(mode: DshConnectionMode) = Unit
     override fun loadRemoteProfile(): DshRemoteProfile? = null

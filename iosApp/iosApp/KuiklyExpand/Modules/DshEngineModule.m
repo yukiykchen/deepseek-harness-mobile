@@ -10,28 +10,6 @@
 
 @synthesize hr_rootView;
 
-- (void)start:(NSDictionary *)args {
-    KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    if (callback) {
-        callback(@{
-            @"phase": @"UNSUPPORTED",
-            @"progress": @0,
-            @"message": @"本地模式已移至 DSH Local",
-        });
-    }
-}
-
-- (id)status:(NSDictionary *)args {
-    return @{
-        @"phase": @"UNSUPPORTED",
-        @"progress": @0,
-        @"message": @"本地模式已移至 DSH Local",
-    };
-}
-
-- (void)stop:(NSDictionary *)args {
-}
-
 - (void)startSsh:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];

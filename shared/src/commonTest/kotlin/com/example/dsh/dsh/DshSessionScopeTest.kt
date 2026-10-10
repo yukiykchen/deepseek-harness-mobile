@@ -5,8 +5,7 @@ import kotlin.test.assertEquals
 
 class DshSessionScopeTest {
     @Test
-    fun storageKeysIsolateLocalRelayAndSshCaches() {
-        assertEquals("local", DshSessionScope(DshConnectionMode.LOCAL).storageKey)
+    fun storageKeysIsolateRelayAndSshCaches() {
         assertEquals("relay:host-1", DshSessionScope(DshConnectionMode.RELAY, "host-1").storageKey)
         assertEquals("ssh:default", DshSessionScope(DshConnectionMode.SSH).storageKey)
         assertEquals(
