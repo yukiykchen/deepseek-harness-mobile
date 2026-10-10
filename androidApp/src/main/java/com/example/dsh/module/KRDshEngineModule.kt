@@ -11,16 +11,6 @@ internal class KRDshEngineModule : KuiklyRenderBaseModule() {
     private var sshListener: ((SshState) -> Unit)? = null
 
     override fun call(method: String, params: String?, callback: KuiklyRenderCallback?): Any? = when (method) {
-        "start" -> {
-            callback?.invoke(
-                mapOf(
-                    "phase" to "UNSUPPORTED",
-                    "progress" to 0,
-                    "message" to "本地模式已移至 DSH Local",
-                ),
-            )
-            null
-        }
         "startSsh" -> {
             sshListener?.let(SshTunnelManager::removeListener)
             val value = org.json.JSONObject(params ?: "{}")
@@ -60,12 +50,6 @@ internal class KRDshEngineModule : KuiklyRenderBaseModule() {
             null
         }
         "sshEndpoint" -> SshTunnelManager.endpoint()
-        "status" -> mapOf(
-            "phase" to "UNSUPPORTED",
-            "progress" to 0,
-            "message" to "本地模式已移至 DSH Local",
-        )
-        "stop" -> null
         else -> null
     }
 
