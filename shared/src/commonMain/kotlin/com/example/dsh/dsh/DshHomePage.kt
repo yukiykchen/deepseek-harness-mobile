@@ -4,7 +4,6 @@ import com.example.dsh.base.BasePager
 import com.example.dsh.base.bridgeModule
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.*
-import com.tencent.kuikly.core.directives.scrollToPosition
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.log.KLog
 import com.tencent.kuikly.core.reactive.handler.observable
@@ -15,17 +14,8 @@ import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.views.KeyboardParams
-import com.tencent.kuikly.core.views.ListContentView
-import com.tencent.kuikly.core.views.ListView
-import com.tencent.kuikly.core.views.ScrollParams
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
@@ -33,9 +23,6 @@ private const val SESSION_CACHE_WARM_LIMIT = 7
 private const val SESSION_CACHE_WARM_INTERVAL_MS = 16
 private const val SESSION_CACHE_WARM_START_DELAY_MS = 600
 private const val CONVERSATION_PANEL_CACHE_LIMIT = 8
-private const val SCROLL_SETTLE_ATTEMPTS = 6
-private val SCROLL_SETTLE_DELAYS_MS = intArrayOf(0, 16, 32, 64, 120, 200)
-private const val FOLLOW_LIST_SLACK_PX = 72f
 
 /** First usable DSH surface: local sessions, streaming Markdown, and a composer. */
 @Page("home")
@@ -96,17 +83,8 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private var topBarRef: ViewRef<com.tencent.kuikly.core.views.DivView>? = null
     private var inputView: TextAreaView? = null
     private var streamHandle: DshStreamHandle? = null
-    private val messageScrollerRefs = mutableMapOf<String, ViewRef<ListView<*, *>>>()
-    private val messageRowRefs = mutableMapOf<String, ViewRef<com.tencent.kuikly.core.views.DivView>>()
     private var historyRequestGeneration = 0
-    private val sessionMessageStates = mutableMapOf<String, ObservableList<DshMessage>>()
-    private val conversationListEpochs = mutableMapOf<String, Int>()
-    private var conversationListEpoch by observable(0)
-    private val sessionMessageReady = mutableSetOf<String>()
     private val pendingSessionSelections = mutableSetOf<String>()
-    private val localReadScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val pendingLocalMessageReads = mutableSetOf<String>()
-    private val sessionCacheStates = mutableMapOf<String, DshSessionCacheState>()
     private var inputFocused = false
     private var streamingAssistantId by observable("")
     // The root id guards callbacks from an old request; the visible id points
@@ -120,10 +98,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private var streamingReasoningContent = ""
     private val pendingAssistantDelta = StringBuilder()
     private var assistantFlushScheduled = false
-    private var scrollSettleGeneration = 0
-    private var followListTail = true
     private var perfTraceSequence = 0
-    private var preloadTraceSequence = 0
     private val queue = DshQueueController(this)
     private val jobs = DshJobsController(this)
     private val goal = DshGoalController(this)
@@ -148,11 +123,29 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         },
     )
     private val turnStatus = DshTurnStatusTicker(this) { streaming || stopButtonVisible || sessionRunning }
-    private val disclosures = DshDisclosureStore(this) { refreshSessionRenderTree(activeSessionId) }
+    private val sessionStore = DshSessionMessageStore(
+        scope = this,
+        localStore = { localStore },
+        connectionId = { activeConnectionId },
+        isBlank = { isBlankSession(it) },
+        listener = object : DshSessionMessageStore.Listener {
+            override fun onDiskLoaded(sessionId: String, preload: Boolean, scrollToEndAfterLoad: Boolean) {
+                if (!preload || conversationPanelIds.size < CONVERSATION_PANEL_CACHE_LIMIT) {
+                    ensureConversationPanel(sessionId)
+                }
+                realizeSessionAfterData(sessionId, scrollToEndAfterLoad)
+                completePendingSessionSelection(sessionId)
+            }
+
+            override fun onReady(sessionId: String) = completePendingSessionSelection(sessionId)
+        },
+    )
+    private val scroller = DshConversationScroller(this, { messages }, { streamingAssistantId })
+    private val disclosures = DshDisclosureStore(this) { scroller.refresh(activeSessionId) }
     private val attachments = DshAttachmentCache(this) { sessionId ->
-        val next = sessionMessageState(sessionId).toList()
+        val next = sessionStore.state(sessionId).toList()
         if (activeSessionId == sessionId) replaceMessagesIfChanged(next)
-        else sessionMessageStates[sessionId] = ObservableList<DshMessage>().also { it.addAll(next) }
+        else sessionStore.put(sessionId, ObservableList<DshMessage>().also { it.addAll(next) })
     }
     private val skills by observableList<DshSkill>()
     private var sessionRunning by observable(false)
@@ -178,7 +171,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     override fun created() {
         super.created()
         val startedAt = TimeSource.Monotonic.markNow()
-        perfLog("startup.created.begin", startedAt)
+        dshPerfLog("startup.created.begin", startedAt)
         val databaseDir = pageData.params.optString("databaseDir")
         if (databaseDir.isNotEmpty()) {
             localStore = runCatching {
@@ -194,24 +187,24 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         )
         restoreCachedSessions()
         if (sessions.isEmpty()) {
-            sessionMessageStates[activeSessionId] = messages
+            sessionStore.put(activeSessionId, messages)
             ensureConversationPanel(activeSessionId)
         }
-        perfLog("startup.restoreCachedSessions.done", startedAt)
+        dshPerfLog("startup.restoreCachedSessions.done", startedAt)
         ensureConversationPanel(activeSessionId)
-        preloadAllSessionMessages()
-        perfLog("startup.preloadAllSessionMessages.scheduled", startedAt)
+        sessionStore.preload(sessions.map { it.id })
+        dshPerfLog("startup.preloadAllSessionMessages.scheduled", startedAt)
         setTimeout(pagerId, SESSION_CACHE_WARM_START_DELAY_MS) {
             warmRecentSessionCache(scrollToEndAfterLoad = false)
         }
         setTimeout(pagerId, 0) { connection.start() }
         getBackPressHandler().addCallback(overlayBackCallback)
-        perfLog("startup.created.end", startedAt)
+        dshPerfLog("startup.created.end", startedAt)
     }
 
     override fun pageWillDestroy() {
         stopCurrentEngine()
-        localReadScope.cancel()
+        sessionStore.close()
         super.pageWillDestroy()
     }
 
@@ -219,7 +212,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val ctx = this
         val wide = pagerData.pageViewWidth >= 720f
         return {
-            ctx.perfLog("body.builder.begin")
+            dshPerfLog("body.builder.begin")
             View {
                 attr {
                     flex(1f)
@@ -257,7 +250,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                         animation(Animation.easeOut(ANIMATION_DURATION_S), ctx.sessionDrawerAnimated)
                     }
                     if (wide) {
-                        ctx.perfLog("body.conversation.begin wide=true panels=${ctx.conversationPanelIds.size}")
+                        dshPerfLog("body.conversation.begin wide=true panels=${ctx.conversationPanelIds.size}")
                         View {
                             attr {
                                 flex(1f)
@@ -285,11 +278,11 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                                 jobCount = { ctx.jobs.items.size },
                             )
                         }
-                        ctx.perfLog("body.conversation.end wide=true")
+                        dshPerfLog("body.conversation.end wide=true")
                     } else {
-                        ctx.perfLog("body.conversation.begin wide=false panels=${ctx.conversationPanelIds.size}")
+                        dshPerfLog("body.conversation.begin wide=false panels=${ctx.conversationPanelIds.size}")
                         ctx.homeConversation(this, ctx.pagerData.pageViewWidth)
-                        ctx.perfLog("body.conversation.end wide=false")
+                        dshPerfLog("body.conversation.end wide=false")
                     }
 
                     vif({ ctx.sessionDrawerVisible }) {
@@ -423,14 +416,12 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         container.DshConversation(
             conversationIds = { ctx.conversationPanelIds },
             activeConversationId = { ctx.activeSessionId },
-            messagesForSession = { ctx.sessionMessageState(it) },
+            messagesForSession = { ctx.sessionStore.state(it) },
             streaming = { ctx.streaming },
             streamingMessageId = { ctx.streamingAssistantId },
             streamingContent = { ctx.streamingAssistantContent },
-            scrollerRef = { id, ref -> ctx.messageScrollerRefs[id] = ref },
-            messageRef = { sessionId, messageId, ref ->
-                ctx.messageRowRefs[ctx.messageRowKey(sessionId, messageId)] = ref
-            },
+            scrollerRef = { id, ref -> ctx.scroller.bindScroller(id, ref) },
+            messageRef = { sessionId, messageId, ref -> ctx.scroller.bindRow(sessionId, messageId, ref) },
             draft = { ctx.draft },
             skills = { ctx.skills },
             onPickSkill = { ctx.draft = "/$it " },
@@ -444,7 +435,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             onSend = { ctx.sendDraft() },
             onStop = { ctx.stopStream() },
             onDismissKeyboard = { ctx.dismissKeyboard() },
-            onUserListScroll = { ctx.onConversationUserScroll(it) },
+            onUserListScroll = { ctx.scroller.onUserScroll(it) },
             modelLabel = { ctx.models.selectedLabel },
             attachmentMenuVisible = { ctx.attachmentMenuVisible },
             voiceActive = { ctx.voiceActive },
@@ -475,7 +466,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             interactions = ctx.interactions,
             sessionRunning = { ctx.sessionRunning },
             isBlankConversation = { ctx.isBlankSession() },
-            conversationListEpoch = { ctx.conversationListEpochFor(it) },
+            conversationListEpoch = { ctx.sessionStore.epochFor(it) },
             turnReconnecting = { isReconnectLabel(ctx.connectionLabel) },
             turnElapsedMs = { ctx.turnStatus.elapsedMs },
             availableWidth = availableWidth,
@@ -534,17 +525,14 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             sessions.map { it.id }
                 .filterNot { loadedIds.contains(it) }
                 .forEach {
-                    sessionMessageStates.remove(it)
-                    sessionCacheStates.remove(it)
-                    sessionMessageReady.remove(it)
+                    sessionStore.forget(it)
                     conversationPanelIds.remove(it)
                 }
-            loaded.forEach { sessionCacheStates[it.id] = DshSessionCacheState.STALE }
             sessions.clear()
             sessions.addAll(loaded)
             refreshVisibleSessions()
             runCatching { localStore?.replaceSessions(activeConnectionId, loaded) }
-            preloadAllSessionMessages()
+            sessionStore.preload(sessions.map { it.id })
             connectionLabel = if (loaded.isEmpty()) "已连接 · 无会话" else "已连接 · 正在同步远程历史"
             if (loaded.isNotEmpty()) {
                 val preferBlankHome = preferBlankHomeOnNextLoad
@@ -702,7 +690,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private fun createSession() {
         val traceId = ++perfTraceSequence
         val startedAt = TimeSource.Monotonic.markNow()
-        perfLog("newSession.$traceId.click", startedAt)
+        dshPerfLog("newSession.$traceId.click", startedAt)
         val hostRepository = hostClient ?: run {
             closeSessionDrawer()
             bridgeModule.toast("未连接到远程 DSH")
@@ -722,10 +710,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             setTimeout(pagerId, 0) { models.load(blankSession.id) }
             return
         }
-        perfLog("newSession.$traceId.ui.cleared", startedAt)
-        perfLog("newSession.$traceId.host.create.request", startedAt)
+        dshPerfLog("newSession.$traceId.ui.cleared", startedAt)
+        dshPerfLog("newSession.$traceId.host.create.request", startedAt)
         hostRepository.createSession(currentWorkspaceId, { sessionId ->
-            perfLog("newSession.$traceId.host.create.response:$sessionId", startedAt)
+            dshPerfLog("newSession.$traceId.host.create.response:$sessionId", startedAt)
             val created = DshSession(
                 id = sessionId,
                 title = "新会话",
@@ -742,10 +730,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             runCatching { localStore?.replaceSessions(activeConnectionId, sessions.toList()) }
             activeSessionId = sessionId
             messages = ObservableList()
-            sessionMessageStates[sessionId] = messages
-            sessionMessageReady.add(sessionId)
+            sessionStore.put(sessionId, messages)
+            sessionStore.markReady(sessionId)
             ensureConversationPanel(sessionId)
-            perfLog("newSession.$traceId.ui.ready", startedAt)
+            dshPerfLog("newSession.$traceId.ui.ready", startedAt)
             draft = ""
             inputView?.setText("")
             applyActiveSessionChrome()
@@ -756,7 +744,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 }
             }
         }, { error ->
-            perfLog("newSession.$traceId.host.create.error:$error", startedAt)
+            dshPerfLog("newSession.$traceId.host.create.error:$error", startedAt)
             connectionLabel = "新会话创建失败"
             messages.add(DshMessage("session-create-error-${messages.size}", DshMessageRole.ERROR, error))
         })
@@ -771,7 +759,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // Show the selected session immediately. The Host history request is
         // remote and can take a moment, so keeping the previous list here
         // makes a session switch look stuck.
-        messages = sessionMessageState(
+        messages = sessionStore.state(
             sessionId,
             scrollToEndAfterLoad = scrollToEndAfterLoad,
         )
@@ -797,11 +785,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         hostRepository.loadWebTimeline(sessionId, { items ->
             if (activeSessionId != sessionId) return@loadWebTimeline
             val projected = items.map { it.toMessage() }
-            sessionMessageReady.add(sessionId)
+            sessionStore.markReady(sessionId)
             replaceMessagesIfChanged(projected, forceReplace)
             if (projected.isNotEmpty()) {
-                persistMessages(sessionId)
-                sessionCacheStates[sessionId] = DshSessionCacheState.SYNCED
+                sessionStore.persist(sessionId, messages)
             }
             projected.mapNotNull { it.attachmentId }.forEach { attachments.load(sessionId, it) }
             completePendingSessionSelection(sessionId)
@@ -864,7 +851,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         } else {
             releaseStreamingUi()
         }
-        persistMessages(sessionId)
+        sessionStore.persist(sessionId, messages)
         hostClient?.detachLiveStreams(sessionId)
         streamHandle = null
     }
@@ -937,7 +924,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                     "ui.complete session=$sessionId resultChars=${result.length} liveChars=${streamingAssistantContent.length} preview='${DshStreamLog.preview(completedContent)}'",
                 )
                 settleStreamingMessage(DshMessageRole.ASSISTANT, completedContent)
-                persistMessages(sessionId)
+                sessionStore.persist(sessionId, messages)
                 connectionLabel = "已连接"
                 streamHandle = null
             },
@@ -951,7 +938,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 ensureStreamingAssistantSegment()
                 DshStreamLog.i("ui.error session=$sessionId message='${DshStreamLog.preview(error)}'")
                 settleStreamingMessage(DshMessageRole.ERROR, error)
-                persistMessages(sessionId)
+                sessionStore.persist(sessionId, messages)
                 connectionLabel = "已连接"
                 streamHandle = null
             },
@@ -978,15 +965,15 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // actual event order instead of grouping all cards at the turn end.
         splitStreamingAssistantBeforeTool()
         messages.add(model.toRemoteMessage(id))
-        refreshSessionRenderTree(activeSessionId)
-        scrollMessagesToEnd()
+        scroller.refresh(activeSessionId)
+        scroller.scrollToEnd()
     }
 
     private fun showContextInjection(event: DshRawSessionEvent) {
         val message = dshContextInjectionMessage(event) ?: return
         if (messages.any { it.id == message.id }) return
         messages.add(message)
-        scrollMessagesToEnd()
+        scroller.scrollToEnd()
     }
 
     private fun showAssistantBlocks(event: DshRawSessionEvent) {
@@ -995,7 +982,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             if (messages.none { it.id == row.id }) messages.add(row)
             row.attachmentId?.let { attachments.load(activeSessionId, it) }
         }
-        scrollMessagesToEnd()
+        scroller.scrollToEnd()
     }
 
     private fun settleRunningTool(event: DshRawSessionEvent) {
@@ -1072,39 +1059,38 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val homeId = cached.firstOrNull { it.blank }?.id
         if (homeId != null) {
             activeSessionId = homeId
-            val state = sessionMessageStates[homeId] ?: ObservableList()
+            val state = sessionStore.state(homeId, loadFromDisk = false)
             state.clear()
-            sessionMessageStates[homeId] = state
-            sessionMessageReady.add(homeId)
+            sessionStore.markReady(homeId)
             messages = state
             ensureConversationPanel(homeId)
             return
         }
         val state = ObservableList<DshMessage>()
         messages = state
-        sessionMessageStates[activeSessionId] = state
-        sessionMessageReady.add(activeSessionId)
+        sessionStore.put(activeSessionId, state)
+        sessionStore.markReady(activeSessionId)
         ensureConversationPanel(activeSessionId)
     }
 
     private fun selectSession(id: String) {
         val traceId = ++perfTraceSequence
         val startedAt = TimeSource.Monotonic.markNow()
-        perfLog("switch.$traceId.request:$id", startedAt)
+        dshPerfLog("switch.$traceId.request:$id", startedAt)
         dismissKeyboard()
         if (id == activeSessionId) {
-            perfLog("switch.$traceId.same-session", startedAt)
+            dshPerfLog("switch.$traceId.same-session", startedAt)
             return
         }
-        if (!sessionMessageReady.contains(id)) {
+        if (!sessionStore.isReady(id)) {
             pendingSessionSelections.add(id)
-            perfLog("switch.$traceId.wait-data", startedAt)
+            dshPerfLog("switch.$traceId.wait-data", startedAt)
             return
         }
         if (!conversationPanelIds.contains(id)) {
             ensureConversationPanel(id)
             addTaskWhenPagerUpdateLayoutFinish {
-                perfLog("switch.$traceId.panel.layout-finished", startedAt)
+                dshPerfLog("switch.$traceId.panel.layout-finished", startedAt)
                 if (activeSessionId != id) selectSession(id)
             }
             return
@@ -1114,25 +1100,25 @@ internal class DshHomePage : BasePager(), DshHomeContext {
 
     private fun selectMountedSession(id: String, traceId: Int = 0, startedAt: TimeMark? = null) {
         if (id == activeSessionId) return
-        perfLog("switch.$traceId.mounted.begin", startedAt)
-        refreshSessionRenderTree(id)
+        dshPerfLog("switch.$traceId.mounted.begin", startedAt)
+        scroller.refresh(id)
         cancelStreamingForSessionSwitch()
-        sessionMessageStates[activeSessionId] = messages
-        val nextMessages = sessionMessageState(id, loadFromDisk = false)
+        sessionStore.put(activeSessionId, messages)
+        val nextMessages = sessionStore.state(id, loadFromDisk = false)
         ensureConversationPanel(id)
         messages = nextMessages
         activeSessionId = id
-        perfLog("switch.$traceId.active-state-swapped", startedAt)
-        scrollMessagesToEnd()
+        dshPerfLog("switch.$traceId.active-state-swapped", startedAt)
+        scroller.scrollToEnd()
         addTaskWhenPagerUpdateLayoutFinish {
-            refreshSessionRenderTree(id)
-            perfLog("switch.$traceId.layout.realized", startedAt)
-            if (activeSessionId == id) scrollMessagesToEnd()
+            scroller.refresh(id)
+            dshPerfLog("switch.$traceId.layout.realized", startedAt)
+            if (activeSessionId == id) scroller.scrollToEnd()
         }
         // Invalidate any in-flight request for the previous session before
         // starting the new one, so an old response cannot repaint this view.
         historyRequestGeneration++
-        loadMessagesFromDisk(id)
+        sessionStore.loadFromDisk(id)
         fetchHostHistory(id)
         setTimeout(pagerId, 0) {
             if (activeSessionId == id) models.load(id)
@@ -1140,21 +1126,11 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         draft = ""
         inputView?.setText("")
         applyActiveSessionChrome()
-        perfLog("switch.$traceId.end", startedAt)
+        dshPerfLog("switch.$traceId.end", startedAt)
     }
 
     private fun isBlankSession(sessionId: String = activeSessionId): Boolean =
         sessions.firstOrNull { it.id == sessionId }?.blank == true
-
-    private fun conversationListEpochFor(sessionId: String): Int {
-        conversationListEpoch
-        return conversationListEpochs[sessionId] ?: 0
-    }
-
-    private fun remountConversationList(sessionId: String) {
-        conversationListEpochs[sessionId] = (conversationListEpochs[sessionId] ?: 0) + 1
-        conversationListEpoch += 1
-    }
 
     private fun applyActiveSessionChrome() {
         interactions.reset()
@@ -1166,20 +1142,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
 
 
     private fun refreshMountedSessionRenderTrees() {
-        conversationPanelIds.toList().forEach { refreshSessionRenderTree(it) }
-    }
-
-    private fun refreshSessionRenderTree(sessionId: String) {
-        val list = messageScrollerRefs[sessionId]?.view ?: return
-        (list.contentView as? ListContentView)?.createRenderViewsOnVisibleRect()
-    }
-
-    private fun perfLog(stage: String, startedAt: TimeMark? = null) {
-        val elapsed = startedAt?.elapsedNow()?.inWholeMilliseconds?.let { " +${it}ms" } ?: ""
-        // BridgeModule.log is asynchronous on Android and can be printed
-        // seconds after the event. KLog keeps the timing trace on Kuikly's
-        // logging path so Logcat timestamps remain meaningful.
-        KLog.i("DshPerf", "[DshPerf] $stage$elapsed")
+        conversationPanelIds.toList().forEach { scroller.refresh(it) }
     }
 
     private fun sessionRenderLog(message: String) {
@@ -1190,153 +1153,21 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         sessionId: String,
         scrollToEndAfterLoad: Boolean = true,
     ) {
-        refreshSessionRenderTree(sessionId)
+        scroller.refresh(sessionId)
         addTaskWhenPagerUpdateLayoutFinish {
-            refreshSessionRenderTree(sessionId)
-            if (scrollToEndAfterLoad && activeSessionId == sessionId) scrollMessagesToEnd()
+            scroller.refresh(sessionId)
+            if (scrollToEndAfterLoad && activeSessionId == sessionId) scroller.scrollToEnd()
         }
         setTimeout(pagerId, 16) {
-            refreshSessionRenderTree(sessionId)
-            if (scrollToEndAfterLoad && activeSessionId == sessionId) scrollMessagesToEnd()
+            scroller.refresh(sessionId)
+            if (scrollToEndAfterLoad && activeSessionId == sessionId) scroller.scrollToEnd()
         }
     }
 
     private fun loadCachedHistory(sessionId: String) {
-        messages = sessionMessageState(sessionId, loadFromDisk = false)
+        messages = sessionStore.state(sessionId, loadFromDisk = false)
         ensureConversationPanel(sessionId)
-        loadMessagesFromDisk(sessionId)
-    }
-
-    private fun sessionMessageState(
-        sessionId: String,
-        loadFromDisk: Boolean = true,
-        scrollToEndAfterLoad: Boolean = true,
-    ): ObservableList<DshMessage> {
-        sessionMessageStates[sessionId]?.let { return it }
-        val state = ObservableList<DshMessage>()
-        sessionMessageStates[sessionId] = state
-        if (loadFromDisk) loadMessagesFromDisk(sessionId, scrollToEndAfterLoad)
-        return state
-    }
-
-    /**
-     * Warm every known conversation after the session index is available.
-     * Reads are serialized through one background coroutine because the local
-     * SQLite driver is shared by the page and should not be queried concurrently.
-     */
-    private fun preloadAllSessionMessages() {
-        val preloadId = ++preloadTraceSequence
-        val queuedAt = TimeSource.Monotonic.markNow()
-        val sessionIds = sessions.toList().map { it.id }
-        perfLog("preload.$preloadId.queued sessions=${sessionIds.size}", queuedAt)
-        // Load data first. Do not mount empty ListViews: LazyLoop initializes
-        // its visible range from the initial list and may not realize the
-        // first items when the list is populated later.
-        sessionIds.forEach { sessionMessageState(it, loadFromDisk = false) }
-        val store = localStore ?: run {
-            sessionIds.forEach {
-                sessionMessageReady.add(it)
-                completePendingSessionSelection(it)
-            }
-            return
-        }
-        val pending = sessionIds
-            .filterNot { sessionMessageReady.contains(it) }
-            .filter { pendingLocalMessageReads.add(it) }
-        if (pending.isEmpty()) {
-            perfLog("preload.$preloadId.nothing-pending", queuedAt)
-            return
-        }
-        perfLog("preload.$preloadId.pending count=${pending.size}", queuedAt)
-        localReadScope.launch {
-            perfLog("preload.$preloadId.coroutine.started", queuedAt)
-            pending.forEach { sessionId ->
-                val readStartedAt = TimeSource.Monotonic.markNow()
-                perfLog("preload.$preloadId.sqlite.begin:$sessionId", queuedAt)
-                val loaded = runCatching { store.loadMessages(activeConnectionId, sessionId) }
-                    .getOrDefault(emptyList())
-                    .filterNot { it.isRuntimeContextSnapshot() }
-                val queryFinishedAt = TimeSource.Monotonic.markNow()
-                val queryMs = readStartedAt.elapsedNow().inWholeMilliseconds
-                perfLog(
-                    "preload.$preloadId.sqlite.end:$sessionId messages=${loaded.size} query=${queryMs}ms",
-                    queuedAt,
-                )
-                setTimeout(pagerId, 0) {
-                    val uiCallbackAt = TimeSource.Monotonic.markNow()
-                    pendingLocalMessageReads.remove(sessionId)
-                    val state = sessionMessageStates[sessionId] ?: return@setTimeout
-                    sessionMessageReady.add(sessionId)
-                    val uiWaitMs = queryFinishedAt.elapsedNow().inWholeMilliseconds
-                    perfLog(
-                        "preload.$preloadId.ui.callback:$sessionId uiWait=${uiWaitMs}ms callbackDelay=${uiCallbackAt.elapsedNow().inWholeMilliseconds}ms",
-                        queuedAt,
-                    )
-                    perfLog(
-                        "sessionData.disk.done:$sessionId messages=${loaded.size} query=${queryMs}ms uiWait=${uiWaitMs}ms",
-                        readStartedAt,
-                    )
-                    if (state.isEmpty() && loaded.isNotEmpty() &&
-                        sessions.firstOrNull { it.id == sessionId }?.blank != true
-                    ) {
-                        state.addAll(loaded)
-                        remountConversationList(sessionId)
-                        perfLog("sessionData.ui.applied:$sessionId messages=${loaded.size}")
-                    }
-                    if (conversationPanelIds.size < CONVERSATION_PANEL_CACHE_LIMIT) {
-                        ensureConversationPanel(sessionId)
-                    }
-                    realizeSessionAfterData(sessionId, scrollToEndAfterLoad = false)
-                    perfLog("preload.$preloadId.ui.applied:$sessionId", queuedAt)
-                    completePendingSessionSelection(sessionId)
-                }
-            }
-            perfLog("preload.$preloadId.coroutine.finished", queuedAt)
-        }
-    }
-
-    private fun loadMessagesFromDisk(
-        sessionId: String,
-        scrollToEndAfterLoad: Boolean = true,
-    ) {
-        if (localStore == null || !pendingLocalMessageReads.add(sessionId)) return
-        val readQueuedAt = TimeSource.Monotonic.markNow()
-        perfLog("sessionRead.queued:$sessionId", readQueuedAt)
-        localReadScope.launch {
-            val readStartedAt = TimeSource.Monotonic.markNow()
-            perfLog("sessionRead.coroutine.started:$sessionId", readQueuedAt)
-            perfLog("sessionRead.sqlite.begin:$sessionId", readQueuedAt)
-            val loaded = runCatching { localStore?.loadMessages(activeConnectionId, sessionId).orEmpty() }
-                    .getOrDefault(emptyList())
-                    .filterNot { it.isRuntimeContextSnapshot() }
-                val queryFinishedAt = TimeSource.Monotonic.markNow()
-            val queryMs = readStartedAt.elapsedNow().inWholeMilliseconds
-            perfLog("sessionRead.sqlite.end:$sessionId messages=${loaded.size} query=${queryMs}ms", readQueuedAt)
-            setTimeout(pagerId, 0) {
-                pendingLocalMessageReads.remove(sessionId)
-                val state = sessionMessageStates[sessionId] ?: return@setTimeout
-                sessionMessageReady.add(sessionId)
-                val uiWaitMs = queryFinishedAt.elapsedNow().inWholeMilliseconds
-                perfLog("sessionRead.ui.callback:$sessionId uiWait=${uiWaitMs}ms", readQueuedAt)
-                perfLog(
-                    "sessionData.disk.done:$sessionId messages=${loaded.size} query=${queryMs}ms uiWait=${uiWaitMs}ms",
-                    readStartedAt,
-                )
-                // A remote history response or a new local prompt wins over
-                // a disk snapshot that finishes later. The state is keyed by
-                // session ID, so an inactive session can be updated safely.
-                if (state.isEmpty() && loaded.isNotEmpty() &&
-                    sessions.firstOrNull { it.id == sessionId }?.blank != true
-                ) {
-                    state.addAll(loaded)
-                    remountConversationList(sessionId)
-                    perfLog("sessionData.ui.applied:$sessionId messages=${loaded.size}")
-                }
-                ensureConversationPanel(sessionId)
-                realizeSessionAfterData(sessionId, scrollToEndAfterLoad)
-                completePendingSessionSelection(sessionId)
-            }
-        }
+        sessionStore.loadFromDisk(sessionId)
     }
 
     private fun completePendingSessionSelection(sessionId: String) {
@@ -1356,12 +1187,12 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         scrollToEndAfterLoad: Boolean = true,
     ) {
         if (index >= sessionIds.size) return
-        sessionMessageState(
+        sessionStore.state(
             sessionIds[index],
             loadFromDisk = true,
             scrollToEndAfterLoad = scrollToEndAfterLoad,
         )
-        if (sessionMessageReady.contains(sessionIds[index])) {
+        if (sessionStore.isReady(sessionIds[index])) {
             ensureConversationPanel(sessionIds[index])
         }
         setTimeout(pagerId, SESSION_CACHE_WARM_INTERVAL_MS) {
@@ -1375,7 +1206,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             val evictIndex = conversationPanelIds.indexOfFirst { it != activeSessionId }
             if (evictIndex >= 0) {
                 val evictedId = conversationPanelIds.removeAt(evictIndex)
-                messageScrollerRefs.remove(evictedId)
+                scroller.forget(evictedId)
             }
         }
         conversationPanelIds.add(sessionId)
@@ -1427,10 +1258,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // DSH ChatView keeps the assistant node out of the flow until the
         // first token. The turn-status row ("Deep diving...") occupies that
         // gap so LazyLoop never has to realize an empty markdown bubble.
-        sessionMessageStates[sessionId] = messages
-        if (wasEmpty) remountConversationList(sessionId)
-        pinFollowListTail()
-        scrollMessagesToMessage(user.id)
+        sessionStore.put(sessionId, messages)
+        if (wasEmpty) sessionStore.remount(sessionId)
+        scroller.pinTail()
+        scroller.scrollToMessage(user.id)
         streamingTurnAnchorAssistantId = messages.lastOrNull(::dshIsLiveAssistantText)?.id.orEmpty()
         streamingAssistantId = ""
         streamingAssistantRootId = assistantId
@@ -1469,7 +1300,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                     "ui.complete session=$sessionId resultChars=${result.length} liveChars=${streamingAssistantContent.length} preview='${DshStreamLog.preview(completedContent)}'",
                 )
                 settleStreamingMessage(DshMessageRole.ASSISTANT, completedContent)
-                persistMessages(sessionId)
+                sessionStore.persist(sessionId, messages)
                 connectionLabel = "已连接"
                 streamHandle = null
             },
@@ -1483,7 +1314,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 ensureStreamingAssistantSegment()
                 DshStreamLog.i("ui.error session=$sessionId message='${DshStreamLog.preview(error)}'")
                 settleStreamingMessage(DshMessageRole.ERROR, error)
-                persistMessages(sessionId)
+                sessionStore.persist(sessionId, messages)
                 connectionLabel = "已连接"
                 streamHandle = null
             },
@@ -1500,7 +1331,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val stoppedContent = streamingAssistantContent + "\n\n*已停止*"
         sessionRenderLog("stream.stop.begin session=$activeSessionId messages=${messages.size} chars=${stoppedContent.length}")
         settleStreamingMessage(DshMessageRole.ASSISTANT, stoppedContent)
-        persistMessages(activeSessionId)
+        sessionStore.persist(activeSessionId, messages)
         connectionLabel = "已连接"
         sessionRenderLog("stream.stop.state-finalized session=$activeSessionId messages=${messages.size}")
     }
@@ -1542,7 +1373,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // Closing the keyboard after send must not undo the scroll to the
         // newly sent user message. Scroll to the end only when the composer
         // is opening while no response is being anchored.
-        if (keyboardHeight > 0f && !streaming) scrollMessagesToEnd()
+        if (keyboardHeight > 0f && !streaming) scroller.scrollToEnd()
     }
 
     private fun effectiveKeyboardHeight(rawHeight: Float): Float {
@@ -1598,8 +1429,8 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         } else {
             messages.add(DshMessage(id, DshMessageRole.ASSISTANT, streamingReasoningContent, streaming = true, isReasoning = true))
         }
-        realizeVisibleMessages()
-        if (followListTail) scrollMessagesToEnd()
+        scroller.realizeVisible()
+        scroller.scrollToEnd()
     }
 
     private fun flushAssistantDelta() {
@@ -1614,9 +1445,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // "behind the visible range" and will not build the cell until scroll.
         // DshMarkdown already reads `streamingAssistantContent` via liveContent.
         insertLiveAssistantRow()
-        ensureLiveMessageCell()
-        refreshSessionRenderTree(activeSessionId)
-        scrollMessagesToEnd()
+        scroller.ensureLiveCell()
+        scroller.refresh(activeSessionId)
+        scroller.scrollToEnd()
     }
 
     /**
@@ -1649,26 +1480,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // Keep content empty until settle. The first-flush snapshot must not
         // become the display source; DshMarkdown reads the live buffer.
         messages.add(DshMessage(id, DshMessageRole.ASSISTANT, "", streaming = true))
-        ensureLiveMessageCell()
-    }
-
-    /**
-     * vforLazy only creates items inside `[currentStart, currentEnd)`. Appending
-     * the first assistant after the list was mounted with a single user bubble
-     * lands at `currentEnd`. `setContentOffset` is a no-op when content is
-     * shorter than the viewport (new session, first turn), so the cell never
-     * appears until the user drags. `scrollToPosition` is what actually builds it.
-     */
-    private fun ensureLiveMessageCell() {
-        if (!followListTail) return
-        val id = streamingAssistantId
-        if (id.isEmpty()) return
-        if (messageRowRefs[messageRowKey(activeSessionId, id)]?.view != null) return
-        val list = messageScrollerRefs[activeSessionId]?.view ?: return
-        val index = messages.indexOfFirst { it.id == id }
-        if (index < 0) return
-        DshStreamLog.i("ui.realize-live-cell id=$id index=$index size=${messages.size}")
-        list.scrollToPosition(index, 0f, false)
+        scroller.ensureLiveCell()
     }
 
     /** Close the current text row immediately before the next tool card. */
@@ -1685,7 +1497,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                     messages.removeAt(index)
                 } else {
                     messages[index] = current.copy(content = text, streaming = false)
-                    realizeVisibleMessages()
+                    scroller.realizeVisible()
                 }
             }
         }
@@ -1704,7 +1516,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             streaming = streaming,
             isReasoning = isReasoning,
         )
-        if (index >= messages.size - 1) realizeVisibleMessages()
+        if (index >= messages.size - 1) scroller.realizeVisible()
     }
 
     private fun finalizeStreamingReasoning() {
@@ -1714,97 +1526,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             messages[index] = messages[index].copy(streaming = false, isReasoning = true)
         }
     }
-
-    private fun scrollMessagesToEnd() {
-        if (!followListTail) return
-        val generation = ++scrollSettleGeneration
-        ensureLiveMessageCell()
-        realizeVisibleMessages()
-        addTaskWhenPagerUpdateLayoutFinish {
-            settleScrollToEnd(generation, 0)
-        }
-    }
-
-    private fun scrollMessagesToMessage(messageId: String) {
-        val generation = ++scrollSettleGeneration
-        addTaskWhenPagerUpdateLayoutFinish {
-            settleScrollToMessage(messageId, generation, 0)
-        }
-    }
-
-    /**
-     * Markdown and LazyLoop can add/layout children over several frames.
-     * Re-apply the bottom offset while that burst settles, otherwise the first
-     * offset is calculated from a shorter content height and the user sees the
-     * list walk down a few screens after launch.
-     */
-    private fun settleScrollToEnd(generation: Int, attempt: Int) {
-        if (generation != scrollSettleGeneration || !followListTail) return
-        ensureLiveMessageCell()
-        realizeVisibleMessages()
-        scrollMessagesToEndAfterLayout()
-        if (attempt >= SCROLL_SETTLE_ATTEMPTS) return
-        setTimeout(pagerId, SCROLL_SETTLE_DELAYS_MS[attempt]) {
-            addTaskWhenPagerUpdateLayoutFinish {
-                settleScrollToEnd(generation, attempt + 1)
-            }
-        }
-    }
-
-    private fun realizeVisibleMessages() {
-        val scroller = messageScrollerRefs[activeSessionId]?.view ?: return
-        val content = scroller.contentView as? ListContentView ?: return
-        content.flexNode.markDirty()
-        content.createRenderViewsOnVisibleRect()
-    }
-
-    private fun onConversationUserScroll(params: ScrollParams) {
-        val maxOffset = (params.contentHeight - params.viewHeight).coerceAtLeast(0f)
-        val nearBottom = params.offsetY >= maxOffset - FOLLOW_LIST_SLACK_PX
-        if (nearBottom) {
-            followListTail = true
-            return
-        }
-        if (params.isDragging) cancelFollowListTail()
-    }
-
-    private fun cancelFollowListTail() {
-        followListTail = false
-        scrollSettleGeneration += 1
-    }
-
-    private fun pinFollowListTail() {
-        followListTail = true
-    }
-
-    private fun scrollMessagesToEndAfterLayout() {
-        if (!followListTail) return
-        val scroller = messageScrollerRefs[activeSessionId]?.view ?: return
-        val contentHeight = scroller.contentView?.flexNode?.layoutFrame?.height ?: return
-        val viewportHeight = scroller.flexNode?.layoutFrame?.height ?: return
-        scroller.setContentOffset(0f, (contentHeight - viewportHeight).coerceAtLeast(0f), animated = false)
-    }
-
-    private fun settleScrollToMessage(messageId: String, generation: Int, attempt: Int) {
-        if (generation != scrollSettleGeneration) return
-        val row = messageRowRefs[messageRowKey(activeSessionId, messageId)]?.view
-        val rowY = row?.flexNode?.layoutFrame?.y
-        if (rowY != null) {
-            messageScrollerRefs[activeSessionId]?.view?.setContentOffset(
-                0f,
-                rowY.coerceAtLeast(0f),
-                animated = false,
-            )
-        }
-        if (attempt >= SCROLL_SETTLE_ATTEMPTS) return
-        setTimeout(pagerId, SCROLL_SETTLE_DELAYS_MS[attempt]) {
-            addTaskWhenPagerUpdateLayoutFinish {
-                settleScrollToMessage(messageId, generation, attempt + 1)
-            }
-        }
-    }
-
-    private fun messageRowKey(sessionId: String, messageId: String): String = "$sessionId:$messageId"
 
     private fun settleStreamingMessage(role: DshMessageRole, content: String) {
         val id = streamingAssistantId
@@ -1822,7 +1543,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             } else {
                 messages.add(DshMessage(id, role, finalContent, streaming = false))
             }
-            realizeVisibleMessages()
+            scroller.realizeVisible()
             DshStreamLog.i(
                 "ui.settle id=$id role=$role index=$index chars=${finalContent.length} preview='${DshStreamLog.preview(finalContent)}'",
             )
@@ -1847,13 +1568,13 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                         }
                     }
                 }
-                refreshSessionRenderTree(sessionId)
+                scroller.refresh(sessionId)
                 sessionRenderLog("stream.render.layout session=$sessionId messages=${messages.size}")
                 setTimeout(pagerId, 16) {
                     if (activeSessionId != sessionId) return@setTimeout
                     addTaskWhenPagerUpdateLayoutFinish {
                         if (activeSessionId != sessionId) return@addTaskWhenPagerUpdateLayoutFinish
-                        refreshSessionRenderTree(sessionId)
+                        scroller.refresh(sessionId)
                         sessionRenderLog("stream.render.refresh session=$sessionId messages=${messages.size}")
                     }
                 }
@@ -1875,12 +1596,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         stopButtonVisible = false
         streamingAssistantContent = ""
         turnStatus.sync()
-    }
-
-    private fun persistMessages(sessionId: String) {
-        val snapshot = messages.toList()
-        sessionMessageStates[sessionId] = messages
-        runCatching { localStore?.replaceMessages(activeConnectionId, sessionId, snapshot) }
     }
 
     private fun replaceMessagesIfChanged(next: List<DshMessage>, force: Boolean = false) {
@@ -1907,8 +1622,8 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             "ui.replace-messages from=${current.size} to=${filtered.size} streaming=$streaming force=$force remount=$remount preview='${DshStreamLog.preview(filtered.lastOrNull()?.content.orEmpty())}'",
         )
         applyMessagesInPlace(filtered)
-        sessionMessageStates[activeSessionId] = messages
-        if (remount) remountConversationList(activeSessionId)
+        sessionStore.put(activeSessionId, messages)
+        if (remount) sessionStore.remount(activeSessionId)
     }
 
     private fun applyMessagesInPlace(next: List<DshMessage>) {
