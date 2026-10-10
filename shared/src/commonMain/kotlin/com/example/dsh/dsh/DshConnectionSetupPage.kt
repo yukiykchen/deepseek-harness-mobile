@@ -39,7 +39,7 @@ internal class DshConnectionSetupPage : BasePager() {
     private var fingerprintPending by observable("")
     private var localStore: DshLocalStore? = null
     private var engineModule: DshEngineModule? = null
-    private var probeRepository: DshRepository? = null
+    private var probeRepository: DshHostClient? = null
 
     override fun created() {
         super.created()
@@ -329,7 +329,7 @@ internal class DshConnectionSetupPage : BasePager() {
                     sshFingerprint = state.message
                 }
                 DshSshPhase.READY -> {
-                        val repository = DshRemoteRepository(
+                        val repository = DshHostClient(
                         network = acquireModule(com.tencent.kuikly.core.module.NetworkModule.MODULE_NAME),
                         webSocket = acquireModule(DshWebSocketModule.MODULE_NAME),
                         connection = DshHostConnection("http://127.0.0.1:${state.localPort}"),
@@ -340,7 +340,7 @@ internal class DshConnectionSetupPage : BasePager() {
                             setTimeout(pagerId, 0) {
                                 busy = false
                                 error = ""
-                                (probeRepository as? DshRemoteRepository)?.stop()
+                                probeRepository?.stop()
                                 module.stopSsh()
                                 openHome()
                             }
@@ -348,7 +348,7 @@ internal class DshConnectionSetupPage : BasePager() {
                             setTimeout(pagerId, 0) {
                                 busy = false
                                 error = "远程 DSH 不可用：$message"
-                                (probeRepository as? DshRemoteRepository)?.stop()
+                                probeRepository?.stop()
                                 module.stopSsh()
                             }
                     })
