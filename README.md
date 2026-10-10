@@ -381,6 +381,7 @@ ohosApp/                             # OpenHarmony 宿主工程
 - [`DshConnectionSetupPage.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshConnectionSetupPage.kt)：启动时选择扫码 / SSH；
 - [`DshRelayManager.kt`](androidApp/src/main/java/com/example/dsh/relay/DshRelayManager.kt)：扫码配对、sealed tunnel 和本机 loopback 网关；
 - [`DshHostProtocol.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHostProtocol.kt)：App 与 Host 的 RPC 和事件协议；
+- [`DshHostClient.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHostClient.kt)：扫码 / SSH 共用的 Host 客户端；
 - [`DshHomePage.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHomePage.kt)：聊天、会话、输入框和模型配置；
 - [`DshLocalStore.android.kt`](shared/src/androidMain/kotlin/com/example/dsh/dsh/DshLocalStore.android.kt)：按连接 scope 隔离的本地数据库。
 

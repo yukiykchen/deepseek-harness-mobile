@@ -1,6 +1,6 @@
 # App 与 Host 协议
 
-这份文档记录 **DSH App 实际调用的 Host 协议**，方便对照代码和官方 Harness API。权威实现在 `shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHostProtocol.kt`。方法名与官方 `packages/host/apiproxy` 对齐，App **不自定 JSON-RPC 方法**。
+这份文档记录 **DSH App 实际调用的 Host 协议**，方便对照代码和官方 Harness API。权威实现在 `shared/src/commonMain/kotlin/com/example/dsh/dsh/` 下的 `DshHostProtocol.kt`（常量与时间线解析）和 `DshHostClient.kt`（RPC 调用）。方法名与官方 `packages/host/apiproxy` 对齐，App **不自定 JSON-RPC 方法**。
 
 扫码 Relay 的配对、密封隧道不属于 Host 协议，见 [dsh-scan-remote](https://github.com/yukiykchen/dsh-scan-remote)。配对成功后，App 只对 **本机 loopback 上的 Host** 说话，信封与 SSH 相同。
 
@@ -10,8 +10,8 @@
 
 | 模式 | `baseUrl` | 鉴权 | 下行事件 | 实现 |
 | --- | --- | --- | --- | --- |
-| 扫码（本 App） | 本机网关（Relay 转到电脑 `:3080`） | `Authorization: Bearer <token>` | WebSocket：`/api/events.mux` + `/api/events.host` | `DshRemoteHostRepository` |
-| SSH（本 App） | `http://127.0.0.1:<转发端口>` | 同扫码，token 可空 | 同扫码 WebSocket | `DshRemoteHostRepository` |
+| 扫码（本 App） | 本机网关（Relay 转到电脑 `:3080`） | `Authorization: Bearer <token>` | WebSocket：`/api/events.mux` + `/api/events.host` | `DshHostClient` |
+| SSH（本 App） | `http://127.0.0.1:<转发端口>` | 同扫码，token 可空 | 同扫码 WebSocket | `DshHostClient` |
 | 手机本地（DSH Local） | `http://127.0.0.1:3080` | 内嵌 Host，通常无 Bearer | SSE：`GET /api/events.mux` | DSH Local 仓库（本仓库已移除） |
 
 上行 RPC 三种模式都是：
@@ -215,8 +215,10 @@ Authorization: Bearer <token>   // token 非空时
 
 | 文件 | 职责 |
 | --- | --- |
-| `DshHostProtocol.kt` | 路径常量、RPC runtime、远程 repository、历史解析 |
-| `DshRemoteRepository.kt` | 扫码 / SSH 门面 |
+| `DshHostProtocol.kt` | 路径常量、`session.history` 时间线解析 |
+| `DshHostConnectionRuntime.kt` | 连接世代、mux/host WebSocket、RPC 排队与发送 |
+| `DshHostClient.kt` | 扫码 / SSH 共用的 Host 客户端：所有 RPC、流式回复、事件分发 |
+| `DshToolViewBodies.kt` | 工具 `view`（terminal/read/diff/search/web）解析 |
 | `DshRemoteToolCallModel.kt` | `tool/call`+`result` → 卡片模型 |
 | `DshHostStore.kt` | 会话、事件、队列、pending 内存投影 |
 | `DshWebSocketModule.kt` | 传输 |

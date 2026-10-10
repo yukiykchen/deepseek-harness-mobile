@@ -44,7 +44,7 @@ private const val FOLLOW_LIST_SLACK_PX = 72f
 /** First usable DSH surface: local sessions, streaming Markdown, and a composer. */
 @Page("home")
 internal class DshHomePage : BasePager() {
-    private var repository: DshRepository? = null
+    private var repository: DshHostClient? = null
     private var localStore: DshLocalStore? = null
     private var engineModule: DshEngineModule? = null
     private var relayEngineEndpoint = ""
@@ -861,14 +861,14 @@ internal class DshHomePage : BasePager() {
                 }
                 DshRelayPhase.RECONNECTING -> {
                     relayEngineEndpoint = ""
-                    (repository as? DshRemoteRepository)?.stop()
+                    repository?.stop()
                     repository = null
                     connectionLabel = "扫码连接重试中"
                     syncTurnStatusTicker()
                 }
                 DshRelayPhase.STOPPED -> {
                     relayEngineEndpoint = ""
-                    (repository as? DshRemoteRepository)?.stop()
+                    repository?.stop()
                     repository = null
                     connectionLabel = "扫码连接已断开"
                 }
@@ -925,8 +925,8 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun connectRemoteEngine(baseUrl: String, token: String = "") {
-        (repository as? DshRemoteRepository)?.stop()
-        repository = DshRemoteRepository(
+        repository?.stop()
+        repository = DshHostClient(
             network = acquireModule<NetworkModule>(NetworkModule.MODULE_NAME),
             webSocket = acquireModule<DshWebSocketModule>(DshWebSocketModule.MODULE_NAME),
             connection = DshHostConnection(baseUrl, token),
@@ -1164,7 +1164,7 @@ internal class DshHomePage : BasePager() {
     private fun stopCurrentEngine() {
         val mode = connectionCoordinator.activeModeOr(connectionMode)
         connectionCoordinator.stop()
-        (repository as? DshRemoteRepository)?.stop()
+        repository?.stop()
         repository = null
         goalSnapshot = null
         goalActionBusy = false
@@ -1178,11 +1178,11 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun goalMutation(
-        action: (DshRemoteRepository, DshGoalSnapshot, (DshRpcError?) -> Unit) -> Unit,
+        action: (DshHostClient, DshGoalSnapshot, (DshRpcError?) -> Unit) -> Unit,
         onDone: (Boolean) -> Unit = {},
     ) {
         val goal = goalSnapshot ?: return
-        val remote = repository as? DshRemoteRepository ?: return
+        val remote = repository ?: return
         if (goalActionBusy) return
         goalActionBusy = true
         goalActionError = ""
@@ -1242,9 +1242,8 @@ internal class DshHomePage : BasePager() {
         }
         dismissKeyboard()
         closeSessionDrawer()
-        val remoteRepository = hostRepository as? DshRemoteRepository
-        val currentWorkspaceId = remoteRepository?.workspaceIdForSession(activeSessionId)
-        val blankSession = remoteRepository?.blankSessionInWorkspace(currentWorkspaceId)
+        val currentWorkspaceId = hostRepository.workspaceIdForSession(activeSessionId)
+        val blankSession = hostRepository.blankSessionInWorkspace(currentWorkspaceId)
         if (blankSession != null) {
             if (blankSession.id != activeSessionId) {
                 selectSession(blankSession.id)
@@ -1326,7 +1325,7 @@ internal class DshHomePage : BasePager() {
         forceReplace: Boolean = false,
         afterApply: () -> Unit = {},
     ) {
-        val hostRepository = repository as? DshRemoteRepository ?: return
+        val hostRepository = repository ?: return
         hostRepository.loadWebTimeline(sessionId, { items ->
             if (activeSessionId != sessionId) return@loadWebTimeline
             val projected = items.map { item ->
@@ -1446,7 +1445,7 @@ internal class DshHomePage : BasePager() {
             releaseStreamingUi()
         }
         persistMessages(sessionId)
-        (repository as? DshRemoteRepository)?.detachLiveStreams(sessionId)
+        repository?.detachLiveStreams(sessionId)
         streamHandle = null
     }
 
@@ -1491,7 +1490,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun attachAdoptedLiveStream(sessionId: String) {
-        val hostRepository = repository as? DshRemoteRepository ?: return
+        val hostRepository = repository ?: return
         streamHandle = hostRepository.adoptLiveStream(
             sessionId = sessionId,
             onDelta = { delta, isReasoning ->
@@ -1540,7 +1539,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun loadSkills(sessionId: String) {
-        val remote = repository as? DshRemoteRepository ?: return
+        val remote = repository ?: return
         skills.clear()
         remote.loadSkills(sessionId, onSuccess = { loaded ->
             if (activeSessionId != sessionId) return@loadSkills
@@ -1551,7 +1550,7 @@ internal class DshHomePage : BasePager() {
 
     private fun loadAttachment(sessionId: String, attachmentId: String) {
         if (attachmentDataUrl(attachmentId) != null || !pendingAttachmentReads.add(attachmentId)) return
-        val hostRepository = repository as? DshRemoteRepository ?: return
+        val hostRepository = repository ?: return
         hostRepository.loadAttachment(sessionId, attachmentId) { dataUrl, error ->
             if (error != null || dataUrl == null) {
                 pendingAttachmentReads.remove(attachmentId)
@@ -1672,7 +1671,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun refreshQueueDock() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val items = repository.queue(activeSessionId)
         queueItems.clear()
         queueItems.addAll(items)
@@ -1685,7 +1684,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun refreshJobsPanel() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val items = repository.jobs(activeSessionId)
         jobItems.clear()
         jobItems.addAll(items)
@@ -1716,14 +1715,14 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun refreshWorkspaceGroups() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val groups = repository.workspaceGroups()
         workspaceGroups.clear()
         workspaceGroups.addAll(groups)
     }
 
     private fun refreshPendingInteractions() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val (approval, question) = repository.pendingInteractions(activeSessionId)
         pendingApproval = approval
         pendingQuestion = question
@@ -1735,7 +1734,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun answerApproval(outcome: String) {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val approval = pendingApproval ?: return
         interactionBusy = true
         repository.respondApproval(
@@ -1807,7 +1806,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun submitQuestion() {
-        val repository = repository as? DshRemoteRepository
+        val repository = repository
         if (repository == null) {
             DshStreamLog.question("submit.abort not-remote-repo")
             return
@@ -1890,7 +1889,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun saveQueueItem(itemId: String) {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val text = queueEditingText.trim()
         if (queueActionBusy || itemId != queueEditingId || text.isEmpty()) return
         queueActionBusy = true
@@ -1924,7 +1923,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun updateQueueItem(itemId: String, action: JSONObject) {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         if (queueActionBusy) return
         queueActionBusy = true
         repository.updateQueue(
@@ -1940,7 +1939,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun renameActiveSession() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val current = sessions.firstOrNull { it.id == activeSessionId } ?: return
         val title = current.title.takeIf { it != "尚无标题" && it != "新会话" } ?: ""
         if (title.isBlank()) return
@@ -1950,7 +1949,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun archiveActiveSession() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         repository.archiveSession(activeSessionId) { _, _ ->
             setTimeout(pagerId, 0) {
                 loadRepository(preferredSessionId = null)
@@ -1960,7 +1959,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun forkActiveSession() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val lastSeq = repository.store.sessionLastSeq[activeSessionId]
         repository.forkSession(activeSessionId, lastSeq) { value, error ->
             if (error != null || value == null) {
@@ -1981,7 +1980,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun exportActiveSession() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val url = repository.sessionExportUrl(activeSessionId)
         acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(
             "link_view",
@@ -2001,7 +2000,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun loadDirectory(path: String?) {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         workspaceBrowserBusy = true
         workspaceBrowserError = ""
         repository.listDirectory(path) { listing, error ->
@@ -2020,7 +2019,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun createRemoteDirectory() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val name = workspaceBrowserNewName.trim()
         if (workspaceBrowserPath.isEmpty() || name.isEmpty()) return
         workspaceBrowserBusy = true
@@ -2038,7 +2037,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun adoptCurrentDirectoryAsWorkspace() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         if (workspaceBrowserPath.isEmpty()) return
         workspaceBrowserBusy = true
         repository.createWorkspace(workspaceBrowserPath) { _, error ->
@@ -2061,7 +2060,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun saveWorkspaceRename() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val workspaceId = workspaceRenameTargetId
         val title = workspaceRenameDraft.trim()
         if (workspaceId.isEmpty() || title.isEmpty()) return
@@ -2087,7 +2086,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun confirmWorkspaceDelete() {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val workspaceId = workspaceDeleteTargetId
         if (workspaceId.isEmpty()) return
         workspaceActionBusy = true
@@ -2106,7 +2105,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun moveWorkspace(workspaceId: String, delta: Int) {
-        val repository = repository as? DshRemoteRepository ?: return
+        val repository = repository ?: return
         val ordered = workspaceGroups.filter { it.workspaceId.isNotEmpty() }
         val index = ordered.indexOfFirst { it.workspaceId == workspaceId }
         if (index < 0) return
@@ -2544,7 +2543,7 @@ internal class DshHomePage : BasePager() {
         dismissKeyboard()
         val prompt = draft.trim()
         if (prompt.isEmpty() || streaming) return
-        val hostRepository = repository as? DshRemoteRepository
+        val hostRepository = repository
         if (hostRepository == null) {
             connectionLabel = "本地内核尚未连接"
             messages.add(DshMessage(
