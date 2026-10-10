@@ -10,10 +10,7 @@ import com.tencent.kuikly.core.log.KLog
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.InputView
-import com.tencent.kuikly.core.views.Modal
-import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.TextAreaView
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.core.module.NetworkModule
@@ -303,98 +300,7 @@ internal class DshHomePage : BasePager() {
                                 },
                             )
                             val centerWidth = (ctx.pagerData.pageViewWidth - 236f - 280f).coerceAtLeast(360f)
-                            DshConversation(
-                                conversationIds = { ctx.conversationPanelIds },
-                                activeConversationId = { ctx.activeSessionId },
-                                messagesForSession = { ctx.sessionMessageState(it) },
-                                streaming = { ctx.streaming },
-                                streamingMessageId = { ctx.streamingAssistantId },
-                                streamingContent = { ctx.streamingAssistantContent },
-                                scrollerRef = { id, ref -> ctx.messageScrollerRefs[id] = ref },
-                                messageRef = { sessionId, messageId, ref ->
-                                    ctx.messageRowRefs[ctx.messageRowKey(sessionId, messageId)] = ref
-                                },
-                                draft = { ctx.draft },
-                                skills = { ctx.skills },
-                                onPickSkill = { ctx.draft = "/$it " },
-                                keyboardHeight = { ctx.keyboardHeight },
-                                stopButtonVisible = { ctx.stopButtonVisible },
-                                inputRef = { ctx.inputView = it.view },
-                                onInputFocusChange = { ctx.inputFocused = it },
-                                onDraftChange = { ctx.draft = it },
-                                keyboardAnimation = { ctx.keyboardAnimation },
-                                onKeyboardHeightChange = { ctx.updateKeyboard(it) },
-                                onSend = { ctx.sendDraft() },
-                                onStop = { ctx.stopStream() },
-                                onDismissKeyboard = { ctx.dismissKeyboard() },
-                                onUserListScroll = { ctx.onConversationUserScroll(it) },
-                                modelLabel = { ctx.selectedModelLabel },
-                                attachmentMenuVisible = { ctx.attachmentMenuVisible },
-                                voiceActive = { ctx.voiceActive },
-                                onOpenModels = { ctx.openModelPicker() },
-                                onToggleAttachments = {
-                                    ctx.dismissKeyboard()
-                                    ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
-                                },
-                                onToggleVoice = { ctx.toggleVoice() },
-                                isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
-                                onToggleDisclosure = { ctx.toggleWebDisclosure(it) },
-                                isBodyDisclosureExpanded = { ctx.isWebBodyDisclosureExpanded(it) },
-                                onToggleBodyDisclosure = { ctx.toggleWebBodyDisclosure(it) },
-                                isJsonNodeExpanded = { messageId, nodeId ->
-                                    ctx.isWebJsonNodeExpanded(messageId, nodeId)
-                                },
-                                onToggleJsonNode = { messageId, nodeId ->
-                                    ctx.toggleWebJsonNode(messageId, nodeId)
-                                },
-                                onCopyToolContent = {
-                                    ctx.bridgeModule.copyToPasteboard(it)
-                                    ctx.bridgeModule.toast("已复制")
-                                },
-                                attachmentDataUrl = { ctx.attachmentDataUrl(it) },
-                                queueItems = { ctx.queueItems },
-                                jobItems = { ctx.jobItems },
-                                goal = { ctx.goalSnapshot },
-                                goalActionBusy = { ctx.goalActionBusy },
-                                goalActionError = { ctx.goalActionError },
-                                onPauseGoal = { ctx.pauseGoal() },
-                                onResumeGoal = { ctx.resumeGoal() },
-                                onEditGoal = { text, done -> ctx.editGoal(text, done) },
-                                onClearGoal = { ctx.clearGoal() },
-                                jobsPanelExpanded = { ctx.jobsPanelExpanded },
-                                jobsNow = { ctx.jobsNow },
-                                onToggleJobsPanel = { ctx.toggleJobsPanel() },
-                                queueExpanded = { ctx.queueDockExpanded },
-                                queueEditingId = { ctx.queueEditingId },
-                                queueActionBusy = { ctx.queueActionBusy },
-                                queueEditingText = { ctx.queueEditingText },
-                                sessionRunning = { ctx.sessionRunning },
-                                isBlankConversation = { ctx.isBlankSession() },
-                                conversationListEpoch = { ctx.conversationListEpochFor(it) },
-                                turnReconnecting = { isReconnectLabel(ctx.connectionLabel) },
-                                turnElapsedMs = { ctx.turnElapsedMs },
-                                onToggleQueue = { ctx.queueDockExpanded = !ctx.queueDockExpanded },
-                                onEditQueueItem = { ctx.editQueueItem(it) },
-                                onQueueEditingTextChange = { ctx.queueEditingText = it },
-                                onSaveQueueItem = { ctx.saveQueueItem(it) },
-                                onCancelQueueItemEdit = { ctx.cancelQueueItemEdit() },
-                                onRemoveQueueItem = { ctx.removeQueueItem(it) },
-                                onSteerQueueItem = { ctx.steerQueueItem(it) },
-                                pendingApproval = { ctx.pendingApproval },
-                                pendingQuestion = { ctx.pendingQuestion },
-                                interactionBusy = { ctx.interactionBusy },
-                                selectedQuestionOptions = { ctx.selectedQuestionOptions },
-                                questionCustom = { ctx.questionCustom },
-                                questionIndex = { ctx.questionIndex },
-                                questionError = { ctx.questionError },
-                                onAnswerApproval = { ctx.answerApproval(it) },
-                                onToggleQuestionOption = { ctx.toggleQuestionOption(it) },
-                                onQuestionCustomChange = { ctx.updateQuestionCustom(it) },
-                                onQuestionNavigate = { ctx.navigateQuestion(it) },
-                                onQuestionSkip = { ctx.skipQuestion() },
-                                onSubmitQuestion = { ctx.submitQuestion() },
-                                availableWidth = centerWidth,
-                            )
+                            ctx.homeConversation(this, centerWidth)
                             DshSessionDetailsPanel(
                                 title = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.title ?: "尚无标题" },
                                 cwd = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.cwd ?: "" },
@@ -408,98 +314,7 @@ internal class DshHomePage : BasePager() {
                         ctx.perfLog("body.conversation.end wide=true")
                     } else {
                         ctx.perfLog("body.conversation.begin wide=false panels=${ctx.conversationPanelIds.size}")
-                        DshConversation(
-                            conversationIds = { ctx.conversationPanelIds },
-                            activeConversationId = { ctx.activeSessionId },
-                            messagesForSession = { ctx.sessionMessageState(it) },
-                            streaming = { ctx.streaming },
-                            streamingMessageId = { ctx.streamingAssistantId },
-                            streamingContent = { ctx.streamingAssistantContent },
-                            scrollerRef = { id, ref -> ctx.messageScrollerRefs[id] = ref },
-                            messageRef = { sessionId, messageId, ref ->
-                                ctx.messageRowRefs[ctx.messageRowKey(sessionId, messageId)] = ref
-                            },
-                            draft = { ctx.draft },
-                            skills = { ctx.skills },
-                            onPickSkill = { ctx.draft = "/$it " },
-                            keyboardHeight = { ctx.keyboardHeight },
-                            stopButtonVisible = { ctx.stopButtonVisible },
-                            inputRef = { ctx.inputView = it.view },
-                            onInputFocusChange = { ctx.inputFocused = it },
-                            onDraftChange = { ctx.draft = it },
-                            keyboardAnimation = { ctx.keyboardAnimation },
-                            onKeyboardHeightChange = { ctx.updateKeyboard(it) },
-                            onSend = { ctx.sendDraft() },
-                            onStop = { ctx.stopStream() },
-                            onDismissKeyboard = { ctx.dismissKeyboard() },
-                            onUserListScroll = { ctx.onConversationUserScroll(it) },
-                            modelLabel = { ctx.selectedModelLabel },
-                            attachmentMenuVisible = { ctx.attachmentMenuVisible },
-                            voiceActive = { ctx.voiceActive },
-                            onOpenModels = { ctx.openModelPicker() },
-                            onToggleAttachments = {
-                                ctx.dismissKeyboard()
-                                ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
-                            },
-                            onToggleVoice = { ctx.toggleVoice() },
-                            isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
-                            onToggleDisclosure = { ctx.toggleWebDisclosure(it) },
-                            isBodyDisclosureExpanded = { ctx.isWebBodyDisclosureExpanded(it) },
-                            onToggleBodyDisclosure = { ctx.toggleWebBodyDisclosure(it) },
-                            isJsonNodeExpanded = { messageId, nodeId ->
-                                ctx.isWebJsonNodeExpanded(messageId, nodeId)
-                            },
-                            onToggleJsonNode = { messageId, nodeId ->
-                                ctx.toggleWebJsonNode(messageId, nodeId)
-                            },
-                            onCopyToolContent = {
-                                ctx.bridgeModule.copyToPasteboard(it)
-                                ctx.bridgeModule.toast("已复制")
-                            },
-                            attachmentDataUrl = { ctx.attachmentDataUrl(it) },
-                            queueItems = { ctx.queueItems },
-                            jobItems = { ctx.jobItems },
-                            goal = { ctx.goalSnapshot },
-                            goalActionBusy = { ctx.goalActionBusy },
-                            goalActionError = { ctx.goalActionError },
-                            onPauseGoal = { ctx.pauseGoal() },
-                            onResumeGoal = { ctx.resumeGoal() },
-                            onEditGoal = { text, done -> ctx.editGoal(text, done) },
-                            onClearGoal = { ctx.clearGoal() },
-                            jobsPanelExpanded = { ctx.jobsPanelExpanded },
-                            jobsNow = { ctx.jobsNow },
-                            onToggleJobsPanel = { ctx.toggleJobsPanel() },
-                            queueExpanded = { ctx.queueDockExpanded },
-                            queueEditingId = { ctx.queueEditingId },
-                            queueActionBusy = { ctx.queueActionBusy },
-                            queueEditingText = { ctx.queueEditingText },
-                            sessionRunning = { ctx.sessionRunning },
-                            isBlankConversation = { ctx.isBlankSession() },
-                            conversationListEpoch = { ctx.conversationListEpochFor(it) },
-                            turnReconnecting = { isReconnectLabel(ctx.connectionLabel) },
-                            turnElapsedMs = { ctx.turnElapsedMs },
-                            onToggleQueue = { ctx.queueDockExpanded = !ctx.queueDockExpanded },
-                            onEditQueueItem = { ctx.editQueueItem(it) },
-                            onQueueEditingTextChange = { ctx.queueEditingText = it },
-                            onSaveQueueItem = { ctx.saveQueueItem(it) },
-                            onCancelQueueItemEdit = { ctx.cancelQueueItemEdit() },
-                            onRemoveQueueItem = { ctx.removeQueueItem(it) },
-                            onSteerQueueItem = { ctx.steerQueueItem(it) },
-                            pendingApproval = { ctx.pendingApproval },
-                            pendingQuestion = { ctx.pendingQuestion },
-                            interactionBusy = { ctx.interactionBusy },
-                            selectedQuestionOptions = { ctx.selectedQuestionOptions },
-                            questionCustom = { ctx.questionCustom },
-                            questionIndex = { ctx.questionIndex },
-                            questionError = { ctx.questionError },
-                            onAnswerApproval = { ctx.answerApproval(it) },
-                            onToggleQuestionOption = { ctx.toggleQuestionOption(it) },
-                            onQuestionCustomChange = { ctx.updateQuestionCustom(it) },
-                            onQuestionNavigate = { ctx.navigateQuestion(it) },
-                            onQuestionSkip = { ctx.skipQuestion() },
-                            onSubmitQuestion = { ctx.submitQuestion() },
-                            availableWidth = ctx.pagerData.pageViewWidth,
-                        )
+                        ctx.homeConversation(this, ctx.pagerData.pageViewWidth)
                         ctx.perfLog("body.conversation.end wide=false")
                     }
 
@@ -610,97 +425,122 @@ internal class DshHomePage : BasePager() {
                     )
                 }
                 vif({ ctx.workspaceRenameTargetId.isNotEmpty() }) {
-                    Modal(inWindow = true) {
-                        attr {
-                            absolutePositionAllZero()
-                            allCenter()
-                            paddingLeft(20f)
-                            paddingRight(20f)
-                            backgroundColor(Color(0x66000000))
-                        }
-                        View {
-                            attr {
-                                width(pagerData.pageViewWidth - 40f)
-                                maxWidth(420f)
-                                padding(20f)
-                                borderRadius(16f)
-                                backgroundColor(Color.WHITE)
-                            }
-                            Text { attr { text("重命名工作区"); fontSize(18f); fontWeightBold(); color(Color(0xFF1F2933)) } }
-                            Input {
-                                attr {
-                                    height(38f)
-                                    marginTop(14f)
-                                    fontSize(14f)
-                                    placeholder("工作区名称")
-                                    placeholderColor(Color(0xFF98A1A9))
-                                    text(ctx.workspaceRenameDraft)
-                                }
-                                event { textDidChange { ctx.workspaceRenameDraft = it.text } }
-                            }
-                            vif({ ctx.workspaceActionError.isNotEmpty() }) {
-                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
-                            }
-                            View {
-                                attr { height(40f); marginTop(18f); flexDirectionRow(); justifyContentFlexEnd() }
-                                Text {
-                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(Color(0xFF7A838A)) }
-                                    event { click { ctx.workspaceRenameTargetId = ""; ctx.workspaceActionError = "" } }
-                                }
-                                Text {
-                                    attr { text(if (ctx.workspaceActionBusy) "保存中..." else "保存"); width(78f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(Color(0xFF4176E6)) }
-                                    event { click { if (!ctx.workspaceActionBusy) ctx.saveWorkspaceRename() } }
-                                }
-                            }
-                        }
-                    }
+                    DshWorkspaceRenameModal(
+                        draft = { ctx.workspaceRenameDraft },
+                        busy = { ctx.workspaceActionBusy },
+                        error = { ctx.workspaceActionError },
+                        onDraftChange = { ctx.workspaceRenameDraft = it },
+                        onSave = { ctx.saveWorkspaceRename() },
+                        onClose = { ctx.workspaceRenameTargetId = ""; ctx.workspaceActionError = "" },
+                    )
                 }
                 vif({ ctx.workspaceDeleteTargetId.isNotEmpty() }) {
-                    Modal(inWindow = true) {
-                        attr {
-                            absolutePositionAllZero()
-                            allCenter()
-                            paddingLeft(20f)
-                            paddingRight(20f)
-                            backgroundColor(Color(0x66000000))
-                        }
-                        View {
-                            attr {
-                                width(pagerData.pageViewWidth - 40f)
-                                maxWidth(420f)
-                                padding(20f)
-                                borderRadius(16f)
-                                backgroundColor(Color.WHITE)
-                            }
-                            Text { attr { text("删除工作区注册?"); fontSize(18f); fontWeightBold(); color(Color(0xFF1F2933)) } }
-                            Text {
-                                attr {
-                                    text("只会从列表移除注册，不会删除目录、会话或日志。")
-                                    marginTop(8f)
-                                    fontSize(13f)
-                                    lineHeight(20f)
-                                    color(Color(0xFF68737D))
-                                }
-                            }
-                            vif({ ctx.workspaceActionError.isNotEmpty() }) {
-                                Text { attr { text(ctx.workspaceActionError); marginTop(8f); fontSize(12f); color(Color(0xFFBF3535)) } }
-                            }
-                            View {
-                                attr { height(40f); marginTop(18f); flexDirectionRow(); justifyContentFlexEnd() }
-                                Text {
-                                    attr { text("取消"); width(78f); height(38f); textAlignCenter(); fontSize(14f); color(Color(0xFF7A838A)) }
-                                    event { click { ctx.workspaceDeleteTargetId = ""; ctx.workspaceActionError = "" } }
-                                }
-                                Text {
-                                    attr { text(if (ctx.workspaceActionBusy) "删除中..." else "删除注册"); width(112f); height(38f); marginLeft(8f); textAlignCenter(); fontSize(14f); color(Color(0xFFD25A5A)) }
-                                    event { click { if (!ctx.workspaceActionBusy) ctx.confirmWorkspaceDelete() } }
-                                }
-                            }
-                        }
-                    }
+                    DshWorkspaceDeleteModal(
+                        busy = { ctx.workspaceActionBusy },
+                        error = { ctx.workspaceActionError },
+                        onConfirm = { ctx.confirmWorkspaceDelete() },
+                        onClose = { ctx.workspaceDeleteTargetId = ""; ctx.workspaceActionError = "" },
+                    )
                 }
             }
         }
+    }
+
+    /** The conversation column is identical in the wide and narrow layouts; only its width differs. */
+    private fun homeConversation(container: ViewContainer<*, *>, availableWidth: Float) {
+        val ctx = this
+        container.DshConversation(
+            conversationIds = { ctx.conversationPanelIds },
+            activeConversationId = { ctx.activeSessionId },
+            messagesForSession = { ctx.sessionMessageState(it) },
+            streaming = { ctx.streaming },
+            streamingMessageId = { ctx.streamingAssistantId },
+            streamingContent = { ctx.streamingAssistantContent },
+            scrollerRef = { id, ref -> ctx.messageScrollerRefs[id] = ref },
+            messageRef = { sessionId, messageId, ref ->
+                ctx.messageRowRefs[ctx.messageRowKey(sessionId, messageId)] = ref
+            },
+            draft = { ctx.draft },
+            skills = { ctx.skills },
+            onPickSkill = { ctx.draft = "/$it " },
+            keyboardHeight = { ctx.keyboardHeight },
+            stopButtonVisible = { ctx.stopButtonVisible },
+            inputRef = { ctx.inputView = it.view },
+            onInputFocusChange = { ctx.inputFocused = it },
+            onDraftChange = { ctx.draft = it },
+            keyboardAnimation = { ctx.keyboardAnimation },
+            onKeyboardHeightChange = { ctx.updateKeyboard(it) },
+            onSend = { ctx.sendDraft() },
+            onStop = { ctx.stopStream() },
+            onDismissKeyboard = { ctx.dismissKeyboard() },
+            onUserListScroll = { ctx.onConversationUserScroll(it) },
+            modelLabel = { ctx.selectedModelLabel },
+            attachmentMenuVisible = { ctx.attachmentMenuVisible },
+            voiceActive = { ctx.voiceActive },
+            onOpenModels = { ctx.openModelPicker() },
+            onToggleAttachments = {
+                ctx.dismissKeyboard()
+                ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
+            },
+            onToggleVoice = { ctx.toggleVoice() },
+            isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
+            onToggleDisclosure = { ctx.toggleWebDisclosure(it) },
+            isBodyDisclosureExpanded = { ctx.isWebBodyDisclosureExpanded(it) },
+            onToggleBodyDisclosure = { ctx.toggleWebBodyDisclosure(it) },
+            isJsonNodeExpanded = { messageId, nodeId ->
+                ctx.isWebJsonNodeExpanded(messageId, nodeId)
+            },
+            onToggleJsonNode = { messageId, nodeId ->
+                ctx.toggleWebJsonNode(messageId, nodeId)
+            },
+            onCopyToolContent = {
+                ctx.bridgeModule.copyToPasteboard(it)
+                ctx.bridgeModule.toast("已复制")
+            },
+            attachmentDataUrl = { ctx.attachmentDataUrl(it) },
+            queueItems = { ctx.queueItems },
+            jobItems = { ctx.jobItems },
+            goal = { ctx.goalSnapshot },
+            goalActionBusy = { ctx.goalActionBusy },
+            goalActionError = { ctx.goalActionError },
+            onPauseGoal = { ctx.pauseGoal() },
+            onResumeGoal = { ctx.resumeGoal() },
+            onEditGoal = { text, done -> ctx.editGoal(text, done) },
+            onClearGoal = { ctx.clearGoal() },
+            jobsPanelExpanded = { ctx.jobsPanelExpanded },
+            jobsNow = { ctx.jobsNow },
+            onToggleJobsPanel = { ctx.toggleJobsPanel() },
+            queueExpanded = { ctx.queueDockExpanded },
+            queueEditingId = { ctx.queueEditingId },
+            queueActionBusy = { ctx.queueActionBusy },
+            queueEditingText = { ctx.queueEditingText },
+            sessionRunning = { ctx.sessionRunning },
+            isBlankConversation = { ctx.isBlankSession() },
+            conversationListEpoch = { ctx.conversationListEpochFor(it) },
+            turnReconnecting = { isReconnectLabel(ctx.connectionLabel) },
+            turnElapsedMs = { ctx.turnElapsedMs },
+            onToggleQueue = { ctx.queueDockExpanded = !ctx.queueDockExpanded },
+            onEditQueueItem = { ctx.editQueueItem(it) },
+            onQueueEditingTextChange = { ctx.queueEditingText = it },
+            onSaveQueueItem = { ctx.saveQueueItem(it) },
+            onCancelQueueItemEdit = { ctx.cancelQueueItemEdit() },
+            onRemoveQueueItem = { ctx.removeQueueItem(it) },
+            onSteerQueueItem = { ctx.steerQueueItem(it) },
+            pendingApproval = { ctx.pendingApproval },
+            pendingQuestion = { ctx.pendingQuestion },
+            interactionBusy = { ctx.interactionBusy },
+            selectedQuestionOptions = { ctx.selectedQuestionOptions },
+            questionCustom = { ctx.questionCustom },
+            questionIndex = { ctx.questionIndex },
+            questionError = { ctx.questionError },
+            onAnswerApproval = { ctx.answerApproval(it) },
+            onToggleQuestionOption = { ctx.toggleQuestionOption(it) },
+            onQuestionCustomChange = { ctx.updateQuestionCustom(it) },
+            onQuestionNavigate = { ctx.navigateQuestion(it) },
+            onQuestionSkip = { ctx.skipQuestion() },
+            onSubmitQuestion = { ctx.submitQuestion() },
+            availableWidth = availableWidth,
+        )
     }
 
     override fun viewDidLoad() {
