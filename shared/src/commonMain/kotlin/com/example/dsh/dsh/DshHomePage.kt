@@ -51,8 +51,6 @@ internal class DshHomePage : BasePager() {
     private var connectionMode by observable(DshConnectionMode.RELAY)
     private val sshMode: Boolean
         get() = connectionMode == DshConnectionMode.SSH
-    private val isRemoteHost: Boolean
-        get() = connectionMode == DshConnectionMode.RELAY || connectionMode == DshConnectionMode.SSH
     private var remoteProfileId by observable(DshSessionScope.DEFAULT_REMOTE_PROFILE_ID)
     private var sshHost by observable("")
     private var sshUser by observable("")
@@ -295,22 +293,16 @@ internal class DshHomePage : BasePager() {
                                 flexDirectionRow()
                                 backgroundColor(Color(BG))
                             }
-                            vif({ ctx.isRemoteHost }) {
-                                DshSessionRail(
-                                    sessions = { ctx.visibleSessions },
-                                    activeId = { ctx.activeSessionId },
-                                    compact = false,
-                                    onSelect = { id ->
-                                        ctx.closeSessionDrawer()
-                                        setTimeout(ctx.pagerId, 0) { ctx.selectSession(id) }
-                                    },
-                                )
-                            }
-                            val centerWidth = if (ctx.isRemoteHost) {
-                                (ctx.pagerData.pageViewWidth - 236f - 280f).coerceAtLeast(360f)
-                            } else {
-                                ctx.pagerData.pageViewWidth
-                            }
+                            DshSessionRail(
+                                sessions = { ctx.visibleSessions },
+                                activeId = { ctx.activeSessionId },
+                                compact = false,
+                                onSelect = { id ->
+                                    ctx.closeSessionDrawer()
+                                    setTimeout(ctx.pagerId, 0) { ctx.selectSession(id) }
+                                },
+                            )
+                            val centerWidth = (ctx.pagerData.pageViewWidth - 236f - 280f).coerceAtLeast(360f)
                             DshConversation(
                                 conversationIds = { ctx.conversationPanelIds },
                                 activeConversationId = { ctx.activeSessionId },
@@ -345,7 +337,6 @@ internal class DshHomePage : BasePager() {
                                     ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
                                 },
                                 onToggleVoice = { ctx.toggleVoice() },
-                                isWebTimeline = { ctx.isRemoteHost },
                                 isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
                                 onToggleDisclosure = { ctx.toggleWebDisclosure(it) },
                                 isBodyDisclosureExpanded = { ctx.isWebBodyDisclosureExpanded(it) },
@@ -404,17 +395,15 @@ internal class DshHomePage : BasePager() {
                                 onSubmitQuestion = { ctx.submitQuestion() },
                                 availableWidth = centerWidth,
                             )
-                            vif({ ctx.isRemoteHost }) {
-                                DshSessionDetailsPanel(
-                                    title = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.title ?: "尚无标题" },
-                                    cwd = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.cwd ?: "" },
-                                    modelLabel = { ctx.selectedModelLabel },
-                                    agentPreset = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.agentPreset.orEmpty() },
-                                    running = { ctx.sessionRunning },
-                                    queueCount = { ctx.queueItems.size },
-                                    jobCount = { ctx.jobItems.size },
-                                )
-                            }
+                            DshSessionDetailsPanel(
+                                title = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.title ?: "尚无标题" },
+                                cwd = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.cwd ?: "" },
+                                modelLabel = { ctx.selectedModelLabel },
+                                agentPreset = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.agentPreset.orEmpty() },
+                                running = { ctx.sessionRunning },
+                                queueCount = { ctx.queueItems.size },
+                                jobCount = { ctx.jobItems.size },
+                            )
                         }
                         ctx.perfLog("body.conversation.end wide=true")
                     } else {
@@ -453,7 +442,6 @@ internal class DshHomePage : BasePager() {
                                 ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
                             },
                             onToggleVoice = { ctx.toggleVoice() },
-                            isWebTimeline = { ctx.isRemoteHost },
                             isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
                             onToggleDisclosure = { ctx.toggleWebDisclosure(it) },
                             isBodyDisclosureExpanded = { ctx.isWebBodyDisclosureExpanded(it) },
@@ -530,9 +518,7 @@ internal class DshHomePage : BasePager() {
 
                 vif({ ctx.sessionDrawerVisible }) {
                     DshSessionDrawer(
-                        sessions = { ctx.visibleSessions },
                         workspaceGroups = { ctx.workspaceGroups },
-                        isWebTimeline = { ctx.isRemoteHost },
                         activeId = { ctx.activeSessionId },
                         animated = { ctx.sessionDrawerAnimated },
                         onClose = { ctx.closeSessionDrawer() },
@@ -608,7 +594,7 @@ internal class DshHomePage : BasePager() {
                         },
                     )
                 }
-                vif({ ctx.workspaceBrowserVisible && ctx.isRemoteHost }) {
+                vif({ ctx.workspaceBrowserVisible }) {
                     DshWorkspaceBrowserModal(
                         path = { ctx.workspaceBrowserPath },
                         home = { ctx.workspaceBrowserHome },
@@ -623,7 +609,7 @@ internal class DshHomePage : BasePager() {
                         onClose = { ctx.workspaceBrowserVisible = false },
                     )
                 }
-                vif({ ctx.workspaceRenameTargetId.isNotEmpty() && ctx.isRemoteHost }) {
+                vif({ ctx.workspaceRenameTargetId.isNotEmpty() }) {
                     Modal(inWindow = true) {
                         attr {
                             absolutePositionAllZero()
@@ -669,7 +655,7 @@ internal class DshHomePage : BasePager() {
                         }
                     }
                 }
-                vif({ ctx.workspaceDeleteTargetId.isNotEmpty() && ctx.isRemoteHost }) {
+                vif({ ctx.workspaceDeleteTargetId.isNotEmpty() }) {
                     Modal(inWindow = true) {
                         attr {
                             absolutePositionAllZero()
@@ -774,9 +760,7 @@ internal class DshHomePage : BasePager() {
                     sessionMessageReady.remove(it)
                     conversationPanelIds.remove(it)
                 }
-            if (isRemoteHost) {
-                loaded.forEach { sessionCacheStates[it.id] = DshSessionCacheState.STALE }
-            }
+            loaded.forEach { sessionCacheStates[it.id] = DshSessionCacheState.STALE }
             sessions.clear()
             sessions.addAll(loaded)
             refreshVisibleSessions()
@@ -1259,16 +1243,8 @@ internal class DshHomePage : BasePager() {
         dismissKeyboard()
         closeSessionDrawer()
         val remoteRepository = hostRepository as? DshRemoteRepository
-        val currentWorkspaceId = if (isRemoteHost) {
-            remoteRepository?.workspaceIdForSession(activeSessionId)
-        } else {
-            null
-        }
-        val blankSession = if (isRemoteHost) {
-            remoteRepository?.blankSessionInWorkspace(currentWorkspaceId)
-        } else {
-            sessions.firstOrNull { it.blank }
-        }
+        val currentWorkspaceId = remoteRepository?.workspaceIdForSession(activeSessionId)
+        val blankSession = remoteRepository?.blankSessionInWorkspace(currentWorkspaceId)
         if (blankSession != null) {
             if (blankSession.id != activeSessionId) {
                 selectSession(blankSession.id)
@@ -1340,35 +1316,8 @@ internal class DshHomePage : BasePager() {
         sessionId: String,
         scrollToEndAfterLoad: Boolean = true,
     ) {
-        if (isRemoteHost) {
-            loadSkills(sessionId)
-            loadWebTimeline(sessionId, scrollToEndAfterLoad)
-            return
-        }
-
-        val requestGeneration = historyRequestGeneration
-        val hostRepository = repository ?: return
-        hostRepository.loadHistory(sessionId, { loaded ->
-            if (requestGeneration != historyRequestGeneration || activeSessionId != sessionId) return@loadHistory
-            sessionMessageReady.add(sessionId)
-            sessionCacheStates[sessionId] = DshSessionCacheState.SYNCED
-            replaceMessagesIfChanged(loaded)
-            runCatching { localStore?.replaceMessages(activeConnectionId, sessionId, loaded) }
-            completePendingSessionSelection(sessionId)
-            realizeSessionAfterData(sessionId, scrollToEndAfterLoad)
-        }, { error ->
-            if (requestGeneration != historyRequestGeneration || activeSessionId != sessionId) return@loadHistory
-            if (messages.isNotEmpty()) {
-                if (isRemoteHost) {
-                    sessionCacheStates[sessionId] = DshSessionCacheState.SYNC_FAILED
-                    connectionLabel = "远程历史同步失败 · 已显示缓存"
-                } else {
-                    connectionLabel = "内核连接失败 · 已显示缓存"
-                }
-            } else {
-                messages.add(DshMessage("history-error", DshMessageRole.ERROR, error))
-            }
-        })
+        loadSkills(sessionId)
+        loadWebTimeline(sessionId, scrollToEndAfterLoad)
     }
 
     private fun loadWebTimeline(
@@ -1379,7 +1328,7 @@ internal class DshHomePage : BasePager() {
     ) {
         val hostRepository = repository as? DshRemoteRepository ?: return
         hostRepository.loadWebTimeline(sessionId, { items ->
-            if (!isRemoteHost || activeSessionId != sessionId) return@loadWebTimeline
+            if (activeSessionId != sessionId) return@loadWebTimeline
             val projected = items.map { item ->
                 when (item.kind) {
                     DshWebTimelineItem.Kind.USER -> DshMessage(item.key, DshMessageRole.USER, item.text)
@@ -1449,7 +1398,7 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun resyncStreamingWithHost(sessionId: String, reason: String) {
-        if (!isRemoteHost || sessionId != activeSessionId) return
+        if (sessionId != activeSessionId) return
         DshStreamLog.i(
             "ui.resync.begin reason=$reason session=$sessionId running=$sessionRunning streaming=$streaming stop=$stopButtonVisible",
         )
@@ -1591,14 +1540,10 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun loadSkills(sessionId: String) {
-        if (!isRemoteHost) {
-            skills.clear()
-            return
-        }
         val remote = repository as? DshRemoteRepository ?: return
         skills.clear()
         remote.loadSkills(sessionId, onSuccess = { loaded ->
-            if (!isRemoteHost || activeSessionId != sessionId) return@loadSkills
+            if (activeSessionId != sessionId) return@loadSkills
             skills.clear()
             skills.addAll(loaded)
         })
@@ -1727,10 +1672,6 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun refreshQueueDock() {
-        if (!isRemoteHost) {
-            queueItems.clear()
-            return
-        }
         val repository = repository as? DshRemoteRepository ?: return
         val items = repository.queue(activeSessionId)
         queueItems.clear()
@@ -1744,10 +1685,6 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun refreshJobsPanel() {
-        if (!isRemoteHost) {
-            jobItems.clear()
-            return
-        }
         val repository = repository as? DshRemoteRepository ?: return
         val items = repository.jobs(activeSessionId)
         jobItems.clear()
@@ -1779,10 +1716,6 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun refreshWorkspaceGroups() {
-        if (!isRemoteHost) {
-            workspaceGroups.clear()
-            return
-        }
         val repository = repository as? DshRemoteRepository ?: return
         val groups = repository.workspaceGroups()
         workspaceGroups.clear()
@@ -1790,17 +1723,6 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun refreshPendingInteractions() {
-        if (!isRemoteHost) {
-            pendingApproval = null
-            pendingQuestion = null
-            selectedQuestionOptions.clear()
-            questionCustom = ""
-            questionIndex = 0
-            questionError = ""
-            questionDrafts.clear()
-            DshStreamLog.question("ui.refresh skipped local-mode")
-            return
-        }
         val repository = repository as? DshRemoteRepository ?: return
         val (approval, question) = repository.pendingInteractions(activeSessionId)
         pendingApproval = approval
@@ -2071,7 +1993,6 @@ internal class DshHomePage : BasePager() {
     }
 
     private fun openWorkspaceBrowser() {
-        if (!isRemoteHost) return
         closeSessionDrawer()
         workspaceBrowserVisible = true
         workspaceBrowserError = ""
@@ -2352,11 +2273,6 @@ internal class DshHomePage : BasePager() {
         questionError = ""
         questionDrafts.clear()
         goalSnapshot = null
-        if (!isRemoteHost) {
-            queueItems.clear()
-            jobItems.clear()
-            return
-        }
         refreshQueueDock()
         refreshJobsPanel()
         refreshPendingInteractions()
@@ -3166,7 +3082,7 @@ internal class DshHomePage : BasePager() {
 
     private fun replaceMessagesIfChanged(next: List<DshMessage>, force: Boolean = false) {
         val filtered = next.filterNot { it.isRuntimeContextSnapshot() }
-        if (streaming && isRemoteHost && !force) {
+        if (streaming && !force) {
             // History is a snapshot that can arrive while the current turn is
             // still being projected. Replacing the observable list here drops
             // optimistic text segments and their in-order tool cards.

@@ -148,7 +148,6 @@ internal fun ViewContainer<*, *>.DshConversation(
     onOpenModels: () -> Unit,
     onToggleAttachments: () -> Unit,
     onToggleVoice: () -> Unit,
-    isWebTimeline: () -> Boolean,
     isDisclosureExpanded: (String) -> Boolean,
     onToggleDisclosure: (String) -> Unit,
     isBodyDisclosureExpanded: (String) -> Boolean,
@@ -273,7 +272,6 @@ internal fun ViewContainer<*, *>.DshConversation(
                                                     activeConversationId() == sessionId &&
                                                     streamingMessageId() == message.id
                                             },
-                                            isWebTimeline = isWebTimeline(),
                                             isExpanded = { isDisclosureExpanded(message.id) },
                                             onToggle = {
                                                 onToggleDisclosure(message.id)
@@ -330,7 +328,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                 DshNewSessionHome()
             }
         }
-        vif({ isWebTimeline() && queueItems().isNotEmpty() }) {
+        vif({ queueItems().isNotEmpty() }) {
             DshQueueDock {
                 attr {
                     items = queueItems()
@@ -349,7 +347,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                 }
             }
         }
-        vif({ isWebTimeline() && jobItems().isNotEmpty() }) {
+        vif({ jobItems().isNotEmpty() }) {
             DshJobsPanel {
                 attr {
                     jobs = jobItems()
@@ -359,7 +357,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                 }
             }
         }
-        vif({ isWebTimeline() && goal() != null }) {
+        vif({ goal() != null }) {
             DshGoalBar {
                 attr {
                     snapshot = goal()
@@ -372,7 +370,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                 }
             }
         }
-        vif({ isWebTimeline() && pendingApproval()?.sessionId == activeConversationId() }) {
+        vif({ pendingApproval()?.sessionId == activeConversationId() }) {
             DshApprovalPanel {
                 attr {
                     approval = pendingApproval()
@@ -382,8 +380,7 @@ internal fun ViewContainer<*, *>.DshConversation(
             }
         }
         vif({
-            isWebTimeline() &&
-                pendingApproval() == null &&
+            pendingApproval() == null &&
                 pendingQuestion()?.sessionId == activeConversationId()
         }) {
             DshQuestionFlow {
@@ -415,7 +412,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                     border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E5EE)))
                 }
                 vif({
-                    isWebTimeline() && draft().startsWith("/") &&
+                    draft().startsWith("/") &&
                         visibleSkillList(skills(), draft().removePrefix("/")).isNotEmpty()
                 }) {
                     View {
@@ -610,7 +607,6 @@ internal fun ViewContainer<*, *>.DshConversation(
 internal fun ViewContainer<*, *>.DshMessageRow(
     message: DshMessage,
     pageStreaming: () -> Boolean,
-    isWebTimeline: Boolean,
     isExpanded: () -> Boolean,
     onToggle: () -> Unit,
     isBodyExpanded: () -> Boolean = { false },
@@ -633,7 +629,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
     ) {
         return
     }
-    if (isWebTimeline && message.isContextInjection) {
+    if (message.isContextInjection) {
         View {
             attr {
                 width(pagerData.pageViewWidth - 36f)
@@ -673,7 +669,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
         }
         return
     }
-    if (isWebTimeline && message.attachmentId != null) {
+    if (message.attachmentId != null) {
         val dataUrl = attachmentDataUrl(message.attachmentId)
         View {
             attr {
@@ -707,7 +703,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
         }
         return
     }
-    if (isWebTimeline && message.isReasoning) {
+    if (message.isReasoning) {
         View {
             attr {
                 width(pagerData.pageViewWidth - 36f)
@@ -730,7 +726,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
         }
         return
     }
-    if (isWebTimeline && message.remoteTool?.kind == DshRemoteToolKind.SKILL) {
+    if (message.remoteTool?.kind == DshRemoteToolKind.SKILL) {
         val remoteTool = message.remoteTool
         View {
             attr {
@@ -757,7 +753,7 @@ internal fun ViewContainer<*, *>.DshMessageRow(
         }
         return
     }
-    if (isWebTimeline && message.role == DshMessageRole.TOOL) {
+    if (message.role == DshMessageRole.TOOL) {
         val remoteTool = message.remoteTool
         val isRemoteSpecial = remoteTool?.kind == DshRemoteToolKind.ASK_QUESTION ||
             remoteTool?.kind == DshRemoteToolKind.TODO
