@@ -15,15 +15,6 @@ internal actual fun createDshLocalStore(path: String, legacyProfile: DshLegacyRe
 private class DshSqliteStore(path: String, legacyProfile: DshLegacyRemoteProfile?) : DshLocalStore {
     private val driver: SqlDriver by lazy { DatabaseManager(path, DshSchema(legacyProfile)).driver }
 
-    override fun loadApiKey(): String = queryOne("SELECT value FROM dsh_settings WHERE key = ?", listOf("deepseek_api_key")) {
-        it.getColumnString(0)
-    }.orEmpty()
-
-    override fun saveApiKey(apiKey: String) = execute(
-        "INSERT OR REPLACE INTO dsh_settings (key, value) VALUES (?, ?)",
-        listOf("deepseek_api_key", apiKey),
-    )
-
     override fun loadLastConnectionMode(): DshConnectionMode = queryOne(
         "SELECT value FROM dsh_settings WHERE key = ?", listOf("last_connection_mode"),
     ) { it.getColumnString(0) }.orEmpty().let {
@@ -41,7 +32,6 @@ private class DshSqliteStore(path: String, legacyProfile: DshLegacyRemoteProfile
             when (mode) {
                 DshConnectionMode.RELAY -> "relay"
                 DshConnectionMode.SSH -> "ssh"
-                DshConnectionMode.LOCAL -> "local"
             },
         ),
     )

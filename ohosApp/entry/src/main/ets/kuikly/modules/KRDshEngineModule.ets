@@ -10,9 +10,6 @@ export class KRDshEngineModule extends KuiklyRenderBaseModule {
 
   call(method: string, params: KRAny, callback: KuiklyRenderCallback | null): KRAny {
     switch (method) {
-      case 'start':
-      case 'status':
-        return this.unsupported(callback);
       case 'startSsh':
         callback?.(mapOf(
           ['phase', 'message', 'localPort', 'generation'],
@@ -21,7 +18,6 @@ export class KRDshEngineModule extends KuiklyRenderBaseModule {
         return null;
       case 'trustSshFingerprint':
       case 'stopSsh':
-      case 'stop':
         return null;
       case 'sshEndpoint':
         return '';
@@ -29,14 +25,5 @@ export class KRDshEngineModule extends KuiklyRenderBaseModule {
         void params;
         return null;
     }
-  }
-
-  private unsupported(callback: KuiklyRenderCallback | null): string {
-    const payload = mapOf(
-      ['phase', 'progress', 'message'],
-      ['UNSUPPORTED', 0, '本地模式已移至 DSH Local'],
-    );
-    callback?.(payload);
-    return JSON.stringify(payload);
   }
 }

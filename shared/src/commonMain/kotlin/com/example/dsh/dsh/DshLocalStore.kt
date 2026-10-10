@@ -2,8 +2,6 @@ package com.example.dsh.dsh
 
 /** Small durable cache used to make the native client feel continuous across launches. */
 internal interface DshLocalStore {
-    fun loadApiKey(): String
-    fun saveApiKey(apiKey: String)
     fun loadLastConnectionMode(): DshConnectionMode
     fun saveLastConnectionMode(mode: DshConnectionMode)
     fun loadRemoteProfile(): DshRemoteProfile?

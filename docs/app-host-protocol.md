@@ -12,7 +12,7 @@
 | --- | --- | --- | --- | --- |
 | 扫码（本 App） | 本机网关（Relay 转到电脑 `:3080`） | `Authorization: Bearer <token>` | WebSocket：`/api/events.mux` + `/api/events.host` | `DshRemoteHostRepository` |
 | SSH（本 App） | `http://127.0.0.1:<转发端口>` | 同扫码，token 可空 | 同扫码 WebSocket | `DshRemoteHostRepository` |
-| 手机本地（DSH Local） | `http://127.0.0.1:3080` | 内嵌 Host，通常无 Bearer | SSE：`GET /api/events.mux` | `DshLegacyHostRepository` |
+| 手机本地（DSH Local） | `http://127.0.0.1:3080` | 内嵌 Host，通常无 Bearer | SSE：`GET /api/events.mux` | DSH Local 仓库（本仓库已移除） |
 
 上行 RPC 三种模式都是：
 
@@ -88,7 +88,7 @@ Authorization: Bearer <token>   // token 非空时
 | `llm.providers` | `{}` | 是否存在 `deepseek-official` |
 | `settings.describe` | `{}` | 读 `llm-deepseek` 的 `apiKeyEnv` |
 | `credentials.describe` | `{ refs: ["DEEPSEEK_API_KEY"] }` | Key 是否已配置、是否可写 |
-| `credentials.set` | `{ ref, value }` | 仅本地模式写入手机侧 Key |
+| `credentials.set` | `{ ref, value }` | 在凭据弹窗里修改电脑端 DSH 的 Key |
 
 ### 工作区与目录
 
@@ -217,10 +217,9 @@ Authorization: Bearer <token>   // token 非空时
 | --- | --- |
 | `DshHostProtocol.kt` | 路径常量、RPC runtime、远程 repository、历史解析 |
 | `DshRemoteRepository.kt` | 扫码 / SSH 门面 |
-| `DshLegacyHostRepository.kt` | 本地 HTTP + SSE / 轮询 |
 | `DshRemoteToolCallModel.kt` | `tool/call`+`result` → 卡片模型 |
 | `DshHostStore.kt` | 会话、事件、队列、pending 内存投影 |
-| `DshWebSocketModule.kt` / `DshSseModule.kt` | 传输 |
+| `DshWebSocketModule.kt` | 传输 |
 
 官方对照：
 

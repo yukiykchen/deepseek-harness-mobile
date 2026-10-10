@@ -278,9 +278,7 @@ internal fun ViewContainer<*, *>.DshWordmark(height: Float = 22f) {
 }
 
 internal fun ViewContainer<*, *>.DshSessionDrawer(
-    sessions: () -> ObservableList<DshSession>,
     workspaceGroups: () -> ObservableList<DshWorkspaceGroup>,
-    isWebTimeline: () -> Boolean,
     activeId: () -> String,
     animated: () -> Boolean,
     onClose: () -> Unit,
@@ -378,43 +376,30 @@ internal fun ViewContainer<*, *>.DshSessionDrawer(
             }
             Scroller {
                 attr { flex(1f) }
-                vif({ !isWebTimeline() }) {
-                    vfor({ sessions() }) { session ->
-                        DshSessionDrawerRow(
-                            title = session.title,
-                            subtitle = session.workspace,
-                            active = activeId() == session.id,
-                            running = session.running,
-                            onSelect = { onSelect(session.id) },
-                        )
-                    }
-                }
-                vif({ isWebTimeline() }) {
-                    vfor({ workspaceGroups() }) { group ->
-                        View {
+                vfor({ workspaceGroups() }) { group ->
+                    View {
+                        attr {
+                            marginTop(10f)
+                            marginBottom(6f)
+                            flexDirectionColumn()
+                        }
+                        Text {
                             attr {
-                                marginTop(10f)
-                                marginBottom(6f)
-                                flexDirectionColumn()
+                                text(group.title + if (group.path.isEmpty()) "" else " · ${group.path}")
+                                lines(1)
+                                fontSize(12f)
+                                fontWeightMedium()
+                                color(Color(0xFF7A838A))
                             }
-                            Text {
-                                attr {
-                                    text(group.title + if (group.path.isEmpty()) "" else " · ${group.path}")
-                                    lines(1)
-                                    fontSize(12f)
-                                    fontWeightMedium()
-                                    color(Color(0xFF7A838A))
-                                }
-                            }
-                            group.sessions.forEach { session ->
-                                DshSessionDrawerRow(
-                                    title = session.title,
-                                    subtitle = if (session.cwd.isEmpty()) group.title else session.cwd,
-                                    active = activeId() == session.id,
-                                    running = session.running,
-                                    onSelect = { onSelect(session.id) },
-                                )
-                            }
+                        }
+                        group.sessions.forEach { session ->
+                            DshSessionDrawerRow(
+                                title = session.title,
+                                subtitle = if (session.cwd.isEmpty()) group.title else session.cwd,
+                                active = activeId() == session.id,
+                                running = session.running,
+                                onSelect = { onSelect(session.id) },
+                            )
                         }
                     }
                 }

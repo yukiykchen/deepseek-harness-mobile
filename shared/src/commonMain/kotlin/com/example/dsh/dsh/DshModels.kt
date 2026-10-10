@@ -1,7 +1,6 @@
 package com.example.dsh.dsh
 
 internal enum class DshConnectionMode {
-    LOCAL,
     RELAY,
     SSH,
 }
@@ -12,14 +11,12 @@ internal data class DshSessionScope(
 ) {
     val storageKey: String
         get() = when (mode) {
-            DshConnectionMode.LOCAL -> LOCAL_STORAGE_KEY
             DshConnectionMode.RELAY -> "relay:${profileId ?: "default"}"
             DshConnectionMode.SSH -> "ssh:${profileId ?: DEFAULT_REMOTE_PROFILE_ID}"
         }
 
     companion object {
         const val DEFAULT_REMOTE_PROFILE_ID = "default"
-        const val LOCAL_STORAGE_KEY = "local"
     }
 }
 
@@ -289,7 +286,7 @@ internal data class DshMessage(
     val isReasoning: Boolean = false,
     val attachmentId: String? = null,
     val toolCallId: String = "",
-    /** Remote-only structured tool state; LOCAL keeps this null. */
+    /** Structured tool state from the Host tool view; null for non-tool rows. */
     val remoteTool: DshRemoteToolCallModel? = null,
 )
 
