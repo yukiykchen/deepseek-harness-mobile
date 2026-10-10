@@ -1088,7 +1088,7 @@ internal class DshHomePage : BasePager() {
         }
         credentialSetupBusy = true
         credentialSetupError = ""
-        if (sshMode) {
+        if (isRemoteHost) {
             val hostRepository = repository
             if (hostRepository == null) {
                 credentialSetupBusy = false
@@ -1137,7 +1137,7 @@ internal class DshHomePage : BasePager() {
         dismissKeyboard()
         attachmentMenuVisible = false
         //closeSessionDrawer()
-        credentialSetupTitle = if (sshMode) "修改电脑端 DSH 的 API Key" else "设置 DeepSeek API Key"
+        credentialSetupTitle = if (isRemoteHost) "修改电脑端 DSH 的 API Key" else "设置 DeepSeek API Key"
         credentialSetupError = ""
         apiKeyDraft = pendingApiKey
         updateCredentialSetupVisibility(true)
