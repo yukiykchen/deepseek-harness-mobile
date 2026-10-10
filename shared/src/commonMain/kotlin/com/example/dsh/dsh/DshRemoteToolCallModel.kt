@@ -228,7 +228,7 @@ internal object DshRemoteToolCallModels {
             view?.optString("cwd")?.takeIf { it.isNotEmpty() },
             input.takeIf { it.isNotEmpty() },
         ).joinToString("\n")
-        DshRemoteToolKind.FILE_MUTATION -> remoteDiffBody(view ?: JSONObject()).ifEmpty { input }
+        DshRemoteToolKind.FILE_MUTATION -> diffBody(view ?: JSONObject()).ifEmpty { input }
         else -> input
     }
 
@@ -239,10 +239,10 @@ internal object DshRemoteToolCallModels {
         fallback: String,
     ): String = when (card) {
         DshToolCardType.TERMINAL -> view?.optString("output")?.takeIf { it.isNotEmpty() } ?: fallback
-        DshToolCardType.READ -> remoteReadBody(view ?: JSONObject()).ifEmpty { fallback }
-        DshToolCardType.DIFF -> remoteDiffBody(view ?: JSONObject()).ifEmpty { fallback }
+        DshToolCardType.READ -> readBody(view ?: JSONObject()).ifEmpty { fallback }
+        DshToolCardType.DIFF -> diffBody(view ?: JSONObject()).ifEmpty { fallback }
         DshToolCardType.SEARCH -> {
-            val structured = remoteSearchBody(view ?: JSONObject())
+            val structured = searchBody(view ?: JSONObject())
             if (view?.optBoolean("truncated") == true && fallback.isNotEmpty()) {
                 listOfNotNull(structured.takeIf { it.isNotEmpty() }, fallback).joinToString("\n\n")
             } else structured.ifEmpty { fallback }
@@ -322,15 +322,6 @@ internal object DshRemoteToolCallModels {
         else -> DshRemoteToolKind.GENERIC
     }
 
-    private fun toolCardType(view: JSONObject?): DshToolCardType = when (view?.optString("card")) {
-        "terminal" -> DshToolCardType.TERMINAL
-        "read" -> DshToolCardType.READ
-        "diff" -> DshToolCardType.DIFF
-        "search" -> DshToolCardType.SEARCH
-        "web" -> DshToolCardType.WEB
-        else -> DshToolCardType.GENERIC
-    }
-
     private fun filePath(kind: DshRemoteToolKind, input: String, arguments: JSONObject?): String? {
         if (kind != DshRemoteToolKind.READ && kind != DshRemoteToolKind.FILE_MUTATION) return null
         return inputString(input, arguments, "path", "file_path")
@@ -374,51 +365,7 @@ internal fun dshWireView(root: JSONObject): JSONObject? {
     return wrapper.optJSONObject("view") ?: wrapper
 }
 
-private fun remoteDiffBody(view: JSONObject): String {
-    val diffs = view.optJSONArray("diffs") ?: JSONArray()
-    return buildString {
-        for (index in 0 until diffs.length()) {
-            val diff = diffs.optJSONObject(index) ?: continue
-            appendLine(diff.optString("path"))
-            appendLine("--- old")
-            appendLine("+++ new")
-            appendLine(diff.optString("oldText"))
-            appendLine(diff.optString("newText"))
-        }
-    }.trim()
-}
-
-private fun remoteReadBody(view: JSONObject): String {
-    val lines = view.optJSONArray("lines") ?: JSONArray()
-    return buildString {
-        for (index in 0 until lines.length()) {
-            val line = lines.optJSONObject(index) ?: continue
-            appendLine("${line.optInt("number")}\t${line.optString("text")}")
-        }
-    }.trim()
-}
-
-private fun remoteSearchBody(view: JSONObject): String = when (view.optString("shape")) {
-    "paths" -> {
-        val paths = view.optJSONArray("paths") ?: JSONArray()
-        buildString { for (index in 0 until paths.length()) appendLine(paths.optString(index)) }.trim()
-    }
-    else -> {
-        val files = view.optJSONArray("files") ?: JSONArray()
-        buildString {
-            for (index in 0 until files.length()) {
-                val file = files.optJSONObject(index) ?: continue
-                appendLine(file.optString("path"))
-                val matches = file.optJSONArray("matches") ?: JSONArray()
-                for (matchIndex in 0 until matches.length()) {
-                    val match = matches.optJSONObject(matchIndex) ?: continue
-                    appendLine("${match.optInt("lineNumber")}\t${match.optString("line")}")
-                }
-            }
-        }.trim()
-    }
-}
-
+/** Tool-card variant of [webBody]: answer + one source per paragraph, for the expanded card body. */
 private fun remoteWebBody(view: JSONObject): String = when (view.optString("kind")) {
     "fetch" -> "${view.optString("url")}\nHTTP ${view.optInt("statusCode")}"
     else -> {
