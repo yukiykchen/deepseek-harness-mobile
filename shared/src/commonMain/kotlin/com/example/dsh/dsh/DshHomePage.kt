@@ -10,7 +10,6 @@ import com.tencent.kuikly.core.log.KLog
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.views.InputView
 import com.tencent.kuikly.core.views.TextAreaView
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.core.module.NetworkModule
@@ -50,7 +49,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         listener = object : DshConnectionController.Listener {
             override fun onClientConnected() = loadRepository(preferredSessionId = activeSessionId)
             override fun onClientReconnected() = loadRepository(preferredSessionId = activeSessionId)
-            override fun onTransportStateChanged() = syncTurnStatusTicker()
+            override fun onTransportStateChanged() = turnStatus.sync()
             override fun beforeSettingsShown() {
                 dismissKeyboard()
                 attachmentMenuVisible = false
@@ -88,11 +87,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private var streamingAssistantContent by observable("")
     private var keyboardHeight by observable(0f)
     private var keyboardAnimation by observable(Animation.easeInOut(ANIMATION_DURATION_S))
-    private var apiKeyDraft by observable("")
-    private var credentialSetupVisible by observable(false)
-    private var credentialSetupBusy by observable(false)
-    private var credentialSetupError by observable("")
-    private var credentialSetupTitle by observable("添加一个 API Key 开始使用")
     private var sessionDrawerVisible by observable(false)
     private var sessionDrawerAnimated by observable(false)
     private var sessionDrawerMaskAnimated by observable(false)
@@ -101,7 +95,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private var voiceActive by observable(false)
     private var topBarRef: ViewRef<com.tencent.kuikly.core.views.DivView>? = null
     private var inputView: TextAreaView? = null
-    private var apiKeyInputView: InputView? = null
     private var streamHandle: DshStreamHandle? = null
     private val messageScrollerRefs = mutableMapOf<String, ViewRef<ListView<*, *>>>()
     private val messageRowRefs = mutableMapOf<String, ViewRef<com.tencent.kuikly.core.views.DivView>>()
@@ -145,19 +138,24 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         onBrowserOpening = { closeSessionDrawer() },
         onWorkspaceAdopted = { loadRepository(preferredSessionId = activeSessionId) },
     )
-    private val webDisclosureStates = mutableMapOf<String, Boolean>()
-    private val webBodyDisclosureStates = mutableMapOf<String, Boolean>()
-    private val webJsonNodeStates = mutableMapOf<String, Boolean>()
-    private var webDisclosureRevision by observable(0)
-    private var attachmentRevision by observable(0)
-    private val cachedAttachmentDataUrls = mutableMapOf<String, String>()
-    private val pendingAttachmentReads = mutableSetOf<String>()
+    private val credentials = DshCredentialController(
+        ctx = this,
+        onVisibilityChanged = { dimSystemBars(it) },
+        onSaved = {
+            dismissKeyboard()
+            connectionLabel = "远程 DSH 已更新"
+            loadRepository()
+        },
+    )
+    private val turnStatus = DshTurnStatusTicker(this) { streaming || stopButtonVisible || sessionRunning }
+    private val disclosures = DshDisclosureStore(this) { refreshSessionRenderTree(activeSessionId) }
+    private val attachments = DshAttachmentCache(this) { sessionId ->
+        val next = sessionMessageState(sessionId).toList()
+        if (activeSessionId == sessionId) replaceMessagesIfChanged(next)
+        else sessionMessageStates[sessionId] = ObservableList<DshMessage>().also { it.addAll(next) }
+    }
     private val skills by observableList<DshSkill>()
     private var sessionRunning by observable(false)
-    private var turnElapsedMs by observable(0L)
-    private var turnStatusMark: TimeMark? = null
-    private var turnStatusTickerGeneration = 0
-    private var turnStatusClockBucket = -1L
 
     /**
      * 系统返回键统一入口：按 z-order 关闭最顶层覆盖层，
@@ -168,7 +166,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             when {
                 workspaces.handleBack() -> Unit
                 connection.settingsVisible -> connection.closeSettings()
-                credentialSetupVisible -> closeCredentialSettings()
+                credentials.visible -> closeCredentialSettings()
                 models.visible -> models.visible = false
                 attachmentMenuVisible -> attachmentMenuVisible = false
                 sessionDrawerVisible -> closeSessionDrawer()
@@ -334,20 +332,14 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                     )
                 }
 
-                vif({ ctx.credentialSetupVisible }) {
+                vif({ ctx.credentials.visible }) {
                     DshCredentialSetupModal(
-                        title = { ctx.credentialSetupTitle },
-                        busy = { ctx.credentialSetupBusy },
-                        error = { ctx.credentialSetupError },
-                        inputRef = {
-                            ctx.apiKeyInputView = it.view
-                            ctx.apiKeyInputView?.setText(ctx.apiKeyDraft)
-                        },
-                        onApiKeyChange = {
-                            ctx.apiKeyDraft = it
-                            ctx.credentialSetupError = ""
-                        },
-                        onSave = { ctx.saveDeepSeekApiKey() },
+                        title = { ctx.credentials.title },
+                        busy = { ctx.credentials.busy },
+                        error = { ctx.credentials.error },
+                        inputRef = { ctx.credentials.bindInput(it.view) },
+                        onApiKeyChange = { ctx.credentials.updateDraft(it) },
+                        onSave = { ctx.credentials.save() },
                         onClose = { ctx.closeCredentialSettings() },
                     )
                 }
@@ -462,21 +454,21 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
             },
             onToggleVoice = { ctx.toggleVoice() },
-            isDisclosureExpanded = { ctx.isWebDisclosureExpanded(it) },
-            onToggleDisclosure = { ctx.toggleWebDisclosure(it) },
-            isBodyDisclosureExpanded = { ctx.isWebBodyDisclosureExpanded(it) },
-            onToggleBodyDisclosure = { ctx.toggleWebBodyDisclosure(it) },
+            isDisclosureExpanded = { ctx.disclosures.isExpanded(it) },
+            onToggleDisclosure = { ctx.disclosures.toggle(it) },
+            isBodyDisclosureExpanded = { ctx.disclosures.isBodyExpanded(it) },
+            onToggleBodyDisclosure = { ctx.disclosures.toggleBody(it) },
             isJsonNodeExpanded = { messageId, nodeId ->
-                ctx.isWebJsonNodeExpanded(messageId, nodeId)
+                ctx.disclosures.isJsonNodeExpanded(messageId, nodeId)
             },
             onToggleJsonNode = { messageId, nodeId ->
-                ctx.toggleWebJsonNode(messageId, nodeId)
+                ctx.disclosures.toggleJsonNode(messageId, nodeId)
             },
             onCopyToolContent = {
                 ctx.bridgeModule.copyToPasteboard(it)
                 ctx.bridgeModule.toast("已复制")
             },
-            attachmentDataUrl = { ctx.attachmentDataUrl(it) },
+            attachmentDataUrl = { ctx.attachments.dataUrl(it) },
             queue = ctx.queue,
             jobs = ctx.jobs,
             goal = ctx.goal,
@@ -485,7 +477,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             isBlankConversation = { ctx.isBlankSession() },
             conversationListEpoch = { ctx.conversationListEpochFor(it) },
             turnReconnecting = { isReconnectLabel(ctx.connectionLabel) },
-            turnElapsedMs = { ctx.turnElapsedMs },
+            turnElapsedMs = { ctx.turnStatus.elapsedMs },
             availableWidth = availableWidth,
         )
     }
@@ -625,7 +617,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                             if (running) "host-session-running" else "host-session-idle",
                         )
                     }
-                    syncTurnStatusTicker()
+                    turnStatus.sync()
                 }
             },
             onProjection = { sessionId, key, value, seq ->
@@ -664,51 +656,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             },
     )
 
-    private fun saveDeepSeekApiKey() {
-        val key = apiKeyDraft.trim()
-        when {
-            key.isEmpty() -> {
-                credentialSetupError = "请输入 API Key 后继续。"
-                return
-            }
-            key.any { it.code !in 0x21..0x7E } -> {
-                credentialSetupError = "API Key 格式错误，请检查后重试。"
-                return
-            }
-        }
-        val hostRepository = hostClient
-        if (hostRepository == null) {
-            credentialSetupError = "远程 DSH 尚未就绪"
-            return
-        }
-        credentialSetupBusy = true
-        credentialSetupError = ""
-        hostRepository.saveDeepSeekApiKey(key, {
-            setTimeout(pagerId, 0) {
-                apiKeyDraft = ""
-                apiKeyInputView?.setText("")
-                credentialSetupBusy = false
-                updateCredentialSetupVisibility(false)
-                dismissKeyboard()
-                connectionLabel = "远程 DSH 已更新"
-                loadRepository()
-            }
-        }, { error ->
-            setTimeout(pagerId, 0) {
-                credentialSetupBusy = false
-                credentialSetupError = "无法修改电脑端 DSH：$error"
-            }
-        })
-    }
-
     private fun openCredentialSettings() {
         dismissKeyboard()
         attachmentMenuVisible = false
-        //closeSessionDrawer()
-        credentialSetupTitle = "修改电脑端 DSH 的 API Key"
-        credentialSetupError = ""
-        apiKeyDraft = ""
-        updateCredentialSetupVisibility(true)
+        credentials.open()
     }
 
     private fun openSettingsPage() {
@@ -739,12 +690,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
 
     private fun closeCredentialSettings() {
         dismissKeyboard()
-        updateCredentialSetupVisibility(false)
-    }
-
-    private fun updateCredentialSetupVisibility(visible: Boolean) {
-        credentialSetupVisible = visible
-        dimSystemBars(visible)
+        credentials.close()
     }
 
     private fun dimSystemBars(dimmed: Boolean) {
@@ -850,62 +796,14 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val hostRepository = hostClient ?: return
         hostRepository.loadWebTimeline(sessionId, { items ->
             if (activeSessionId != sessionId) return@loadWebTimeline
-            val projected = items.map { item ->
-                when (item.kind) {
-                    DshWebTimelineItem.Kind.USER -> DshMessage(item.key, DshMessageRole.USER, item.text)
-                    DshWebTimelineItem.Kind.ASSISTANT -> DshMessage(item.key, DshMessageRole.ASSISTANT, item.text)
-                    DshWebTimelineItem.Kind.REASONING -> DshMessage(
-                        item.key,
-                        DshMessageRole.ASSISTANT,
-                        item.text,
-                        isReasoning = true,
-                    )
-                    DshWebTimelineItem.Kind.IMAGE -> DshMessage(
-                        item.key,
-                        DshMessageRole.ASSISTANT,
-                        "",
-                        attachmentId = item.attachmentId,
-                    )
-                    DshWebTimelineItem.Kind.UNKNOWN_BLOCK -> DshMessage(
-                        item.key,
-                        DshMessageRole.TOOL,
-                        item.text,
-                        toolName = "未知内容块",
-                        toolCardType = DshToolCardType.JSON,
-                    )
-                    DshWebTimelineItem.Kind.ERROR -> DshMessage(item.key, DshMessageRole.ERROR, item.text)
-                    DshWebTimelineItem.Kind.CONTEXT -> DshMessage(
-                        item.key,
-                        DshMessageRole.TOOL,
-                        item.text,
-                        toolName = item.sourceLabel,
-                        isContextInjection = true,
-                        contextBody = item.text,
-                        contextForm = item.source?.optString("form").orEmpty(),
-                        contextCatalog = item.source?.let(::contextCatalogEntries).orEmpty(),
-                        contextSections = item.source?.let(::contextSections).orEmpty(),
-                        contextRecalls = item.source?.let(::contextRecalls).orEmpty(),
-                        contextInstructions = item.source?.let(::contextInstructions).orEmpty(),
-                        contextRelaySender = item.source?.let(::contextRelaySender).orEmpty(),
-                    )
-                    DshWebTimelineItem.Kind.TOOL -> item.remoteTool?.toRemoteMessage(item.key) ?: DshMessage(
-                        item.key,
-                        DshMessageRole.TOOL,
-                        item.cardBody.ifEmpty { listOfNotNull(item.input, item.output).joinToString("\n\n") },
-                        toolName = item.cardTitle.ifEmpty { item.toolName ?: "工具" },
-                        toolCardType = item.cardType,
-                        toolRunning = item.running,
-                        toolError = item.error != null,
-                    )
-                }
-            }
+            val projected = items.map { it.toMessage() }
             sessionMessageReady.add(sessionId)
             replaceMessagesIfChanged(projected, forceReplace)
             if (projected.isNotEmpty()) {
                 persistMessages(sessionId)
                 sessionCacheStates[sessionId] = DshSessionCacheState.SYNCED
             }
-            projected.mapNotNull { it.attachmentId }.forEach { loadAttachment(sessionId, it) }
+            projected.mapNotNull { it.attachmentId }.forEach { attachments.load(sessionId, it) }
             completePendingSessionSelection(sessionId)
             realizeSessionAfterData(sessionId, scrollToEndAfterLoad)
             afterApply()
@@ -1005,7 +903,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             connectionLabel = "正在生成"
         }
         attachAdoptedLiveStream(sessionId)
-        syncTurnStatusTicker()
+        turnStatus.sync()
         DshStreamLog.i(
             "ui.resync.resume reason=$reason rebound=$rebound id=${streamingAssistantId.ifEmpty { streamingAssistantRootId }} chars=${streamingAssistantContent.length}",
         )
@@ -1070,22 +968,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         })
     }
 
-    private fun loadAttachment(sessionId: String, attachmentId: String) {
-        if (attachmentDataUrl(attachmentId) != null || !pendingAttachmentReads.add(attachmentId)) return
-        val hostRepository = hostClient ?: return
-        hostRepository.loadAttachment(sessionId, attachmentId) { dataUrl, error ->
-            if (error != null || dataUrl == null) {
-                pendingAttachmentReads.remove(attachmentId)
-                return@loadAttachment
-            }
-            cachedAttachmentDataUrls[attachmentId] = dataUrl
-            attachmentRevision += 1
-            val next = sessionMessageState(sessionId).toList()
-            if (activeSessionId == sessionId) replaceMessagesIfChanged(next)
-            else sessionMessageStates[sessionId] = ObservableList<DshMessage>().also { it.addAll(next) }
-        }
-    }
-
     private fun showRunningTool(event: DshRawSessionEvent) {
         val payload = runCatching { JSONObject(event.raw) }.getOrNull() ?: return
         val model = DshRemoteToolCallModels.fromLiveCall(payload) ?: return
@@ -1101,84 +983,24 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     }
 
     private fun showContextInjection(event: DshRawSessionEvent) {
-        val payload = runCatching { JSONObject(event.raw) }.getOrNull() ?: return
-        val data = dshWireEvent(payload).optJSONObject("data") ?: return
-        val source = data.optJSONObject("source") ?: return
-        if (source.optString("kind") == "user") return
-        val id = "context-${event.seq}"
-        if (messages.any { it.id == id }) return
-        val content = data.optJSONArray("content") ?: return
-        val text = buildString {
-            for (index in 0 until content.length()) {
-                val block = content.optJSONObject(index) ?: continue
-                if (block.optString("type") == "text") append(block.optString("text"))
-            }
-        }.trim()
-        if (text.isEmpty()) return
-        messages.add(DshMessage(
-            id = id,
-            role = DshMessageRole.TOOL,
-            content = text,
-            toolName = contextSummary(source),
-            isContextInjection = true,
-            contextBody = text,
-            contextForm = source.optString("form"),
-            contextCatalog = contextCatalogEntries(source),
-            contextSections = contextSections(source),
-            contextRecalls = contextRecalls(source),
-            contextInstructions = contextInstructions(source),
-            contextRelaySender = contextRelaySender(source),
-        ))
+        val message = dshContextInjectionMessage(event) ?: return
+        if (messages.any { it.id == message.id }) return
+        messages.add(message)
         scrollMessagesToEnd()
     }
 
     private fun showAssistantBlocks(event: DshRawSessionEvent) {
-        val payload = runCatching { JSONObject(event.raw) }.getOrNull() ?: return
-        val data = dshWireEvent(payload).optJSONObject("data") ?: return
-        val blocks = (data.optJSONObject("message") ?: data).optJSONArray("content") ?: return
-        for (index in 0 until blocks.length()) {
-            val block = blocks.optJSONObject(index) ?: continue
-            when (block.optString("type")) {
-                "image" -> {
-                    val attachmentId = block.optJSONObject("attachment")?.optString("attachmentId").orEmpty()
-                    if (attachmentId.isEmpty()) continue
-                    val id = "image-${event.seq}-$index"
-                    if (messages.none { it.id == id }) {
-                        messages.add(DshMessage(
-                            id = id,
-                            role = DshMessageRole.ASSISTANT,
-                            content = "",
-                            attachmentId = attachmentId,
-                        ))
-                    }
-                    loadAttachment(activeSessionId, attachmentId)
-                }
-                "text", "reasoning", "tool-call" -> Unit
-                else -> {
-                    val id = "block-${event.seq}-$index"
-                    if (messages.none { it.id == id }) {
-                        messages.add(DshMessage(
-                            id = id,
-                            role = DshMessageRole.TOOL,
-                            content = block.toString(),
-                            toolName = "未知内容块",
-                            toolCardType = DshToolCardType.JSON,
-                        ))
-                    }
-                }
-            }
+        val rows = dshAssistantBlockMessages(event) ?: return
+        for (row in rows) {
+            if (messages.none { it.id == row.id }) messages.add(row)
+            row.attachmentId?.let { attachments.load(activeSessionId, it) }
         }
         scrollMessagesToEnd()
     }
 
     private fun settleRunningTool(event: DshRawSessionEvent) {
         val payload = runCatching { JSONObject(event.raw) }.getOrNull() ?: return
-        val eventData = dshWireEvent(payload).optJSONObject("data") ?: return
-        val message = eventData.optJSONObject("message")
-        val resultBlock = message?.optJSONArray("content")?.optJSONObject(0)
-        val callId = resultBlock?.optString("toolCallId")
-            ?: message?.optJSONObject("source")?.optString("callId")
-            ?: eventData.optString("callId")
+        val callId = dshToolResultCallId(payload)
         if (callId.isEmpty()) return
         val index = messages.indexOfFirst { it.role == DshMessageRole.TOOL && it.toolCallId == callId }
         if (index < 0) return
@@ -1186,12 +1008,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val model = DshRemoteToolCallModels.settleLiveResult(previous, payload) ?: return
         messages[index] = model.toRemoteMessage(messages[index].id)
     }
-
-    private fun attachmentDataUrl(attachmentId: String): String? {
-        attachmentRevision // Read the reactive revision so image rows rerender after downloads.
-        return cachedAttachmentDataUrls[attachmentId]
-    }
-
 
     private fun renameActiveSession() {
         val client = hostClient ?: return
@@ -1327,45 +1143,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         perfLog("switch.$traceId.end", startedAt)
     }
 
-    private fun isWebDisclosureExpanded(id: String): Boolean {
-        webDisclosureRevision
-        return webDisclosureStates[id] == true
-    }
-
-    private fun toggleWebDisclosure(id: String) {
-        val next = webDisclosureStates[id] != true
-        webDisclosureStates[id] = next
-        if (!next) {
-            webBodyDisclosureStates.remove(id)
-            webJsonNodeStates.keys.filter { it.startsWith("$id:") }.toList().forEach(webJsonNodeStates::remove)
-        }
-        webDisclosureRevision += 1
-        refreshSessionRenderTree(activeSessionId)
-    }
-
-    private fun isWebBodyDisclosureExpanded(id: String): Boolean {
-        webDisclosureRevision
-        return webBodyDisclosureStates[id] == true
-    }
-
-    private fun toggleWebBodyDisclosure(id: String) {
-        webBodyDisclosureStates[id] = webBodyDisclosureStates[id] != true
-        webDisclosureRevision += 1
-        refreshSessionRenderTree(activeSessionId)
-    }
-
-    private fun isWebJsonNodeExpanded(messageId: String, nodeId: String): Boolean {
-        webDisclosureRevision
-        return webJsonNodeStates["$messageId:$nodeId"] == true
-    }
-
-    private fun toggleWebJsonNode(messageId: String, nodeId: String) {
-        val key = "$messageId:$nodeId"
-        webJsonNodeStates[key] = webJsonNodeStates[key] != true
-        webDisclosureRevision += 1
-        refreshSessionRenderTree(activeSessionId)
-    }
-
     private fun isBlankSession(sessionId: String = activeSessionId): Boolean =
         sessions.firstOrNull { it.id == sessionId }?.blank == true
 
@@ -1385,43 +1162,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         queue.refresh()
         jobs.refresh()
         interactions.refresh()
-    }
-
-
-    private fun isTurnStatusActive(): Boolean =
-        streaming || stopButtonVisible || sessionRunning
-
-    private fun syncTurnStatusTicker() {
-        if (!isTurnStatusActive()) {
-            turnStatusTickerGeneration += 1
-            turnStatusMark = null
-            turnElapsedMs = 0
-            turnStatusClockBucket = -1L
-            return
-        }
-        if (turnStatusMark == null) {
-            turnStatusMark = TimeSource.Monotonic.markNow()
-        }
-        val token = ++turnStatusTickerGeneration
-        fun tick() {
-            if (token != turnStatusTickerGeneration) return
-            if (!isTurnStatusActive()) {
-                turnStatusMark = null
-                turnElapsedMs = 0
-                turnStatusClockBucket = -1L
-                return
-            }
-            val elapsed = turnStatusMark?.elapsedNow()?.inWholeMilliseconds ?: 0L
-            val showClock = elapsed >= TURN_STATUS_CLOCK_AFTER_MS
-            val clockBucket = if (showClock) elapsed / 1_000L else 0L
-            if (clockBucket != turnStatusClockBucket) {
-                turnStatusClockBucket = clockBucket
-                turnElapsedMs = elapsed
-            }
-            val wait = if (showClock) 1_000L else (TURN_STATUS_CLOCK_AFTER_MS - elapsed).coerceAtLeast(200L)
-            setTimeout(pagerId, wait.toInt()) { tick() }
-        }
-        tick()
     }
 
 
@@ -1705,7 +1445,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         streaming = true
         stopButtonVisible = true
         connectionLabel = "正在生成"
-        syncTurnStatusTicker()
+        turnStatus.sync()
         streamHandle = hostRepository.streamReply(
             pagerId = pagerId,
             sessionId = sessionId,
@@ -1785,7 +1525,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         streamingTurnAnchorAssistantId = ""
         streaming = false
         stopButtonVisible = false
-        syncTurnStatusTicker()
+        turnStatus.sync()
     }
 
     private fun dismissKeyboard() {
@@ -2092,7 +1832,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             stopButtonVisible = false
             streaming = false
             streamingAssistantContent = finalContent
-            syncTurnStatusTicker()
+            turnStatus.sync()
             addTaskWhenPagerUpdateLayoutFinish {
                 if (activeSessionId != sessionId) return@addTaskWhenPagerUpdateLayoutFinish
                 if (!streaming && streamingAssistantId == id) {
@@ -2134,7 +1874,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         streaming = false
         stopButtonVisible = false
         streamingAssistantContent = ""
-        syncTurnStatusTicker()
+        turnStatus.sync()
     }
 
     private fun persistMessages(sessionId: String) {
