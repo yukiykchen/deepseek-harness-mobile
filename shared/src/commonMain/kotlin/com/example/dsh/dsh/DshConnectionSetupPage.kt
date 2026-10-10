@@ -27,15 +27,18 @@ internal class DshConnectionSetupPage : BasePager() {
     private var relayHostId by observable("")
     private var relayOrigin by observable("")
     private var relayMessage by observable("")
-    private var host by observable("")
-    private var user by observable("")
-    private var sshPort by observable("22")
-    private var dshPort by observable("3080")
-    private var sshFingerprint by observable("")
-    private var keyId by observable("")
-    private var keyLabel by observable("未导入 SSH 私钥")
-    private var busy by observable(false)
-    private var error by observable("")
+    private val form = DshSshProfileForm(this)
+    /** Shared with [form] so key import and relay pairing report through one busy / error line. */
+    private var busy: Boolean
+        get() = form.busy
+        set(value) {
+            form.busy = value
+        }
+    private var error: String
+        get() = form.error
+        set(value) {
+            form.error = value
+        }
     private var fingerprintPending by observable("")
     private var localStore: DshLocalStore? = null
     private var engineModule: DshEngineModule? = null
@@ -89,13 +92,7 @@ internal class DshConnectionSetupPage : BasePager() {
             runCatching { store?.saveLastConnectionMode(DshConnectionMode.SSH) }
         }
         if (profile != null) clearLegacyPreferences()
-        host = profile?.host.orEmpty()
-        user = profile?.username.orEmpty()
-        sshPort = profile?.sshPort?.toString() ?: "22"
-        dshPort = profile?.remoteDshPort?.toString() ?: "3080"
-        keyId = profile?.keyId.orEmpty()
-        sshFingerprint = profile?.hostFingerprint.orEmpty()
-        keyLabel = if (keyId.isEmpty()) "未导入 SSH 私钥" else "已导入 SSH 私钥"
+        form.load(profile)
     }
 
     override fun body(): ViewBuilder {
@@ -157,17 +154,18 @@ internal class DshConnectionSetupPage : BasePager() {
                         }
                     }
                     vif({ ctx.connectionMode == DshConnectionMode.SSH }) {
-                        DshSetupInput("SSH 主机", { ctx.host }, "例如 Tailscale IP 或域名") { ctx.host = it; ctx.error = "" }
-                        DshSetupInput("SSH 用户名", { ctx.user }, "例如 alex") { ctx.user = it; ctx.error = "" }
+                        val form = ctx.form
+                        DshSetupInput("SSH 主机", { form.host }, "例如 Tailscale IP 或域名") { form.host = it; form.error = "" }
+                        DshSetupInput("SSH 用户名", { form.user }, "例如 alex") { form.user = it; form.error = "" }
                         View {
                             attr { flexDirectionRow(); marginTop(4f) }
-                            DshSetupInput("SSH 端口", { ctx.sshPort }, "22", 0.5f) { ctx.sshPort = it; ctx.error = "" }
-                            DshSetupInput("远程 DSH 端口", { ctx.dshPort }, "3080", 0.5f, 12f) { ctx.dshPort = it; ctx.error = "" }
+                            DshSetupInput("SSH 端口", { form.sshPort }, "22", 0.5f) { form.sshPort = it; form.error = "" }
+                            DshSetupInput("远程 DSH 端口", { form.dshPort }, "3080", 0.5f, 12f) { form.dshPort = it; form.error = "" }
                         }
                         View {
                             attr { height(46f); marginTop(12f); flexDirectionRow(); alignItemsCenter(); paddingLeft(12f); paddingRight(12f); borderRadius(8f); backgroundColor(Color.WHITE); border(Border(1f, BorderStyle.SOLID, Color(0xFFD9DEE3))) }
-                            Text { attr { text(ctx.keyLabel); flex(1f); fontSize(14f); color(Color(0xFF4F565C)) } }
-                            Text { attr { text(if (ctx.busy) "导入中..." else "导入私钥"); fontSize(14f); color(Color(0xFF4176E6)) }; event { click { if (!ctx.busy) ctx.pickKey() } } }
+                            Text { attr { text(ctx.form.keyLabel); flex(1f); fontSize(14f); color(Color(0xFF4F565C)) } }
+                            Text { attr { text(if (ctx.busy) "导入中..." else "导入私钥"); fontSize(14f); color(Color(0xFF4176E6)) }; event { click { if (!ctx.busy) ctx.form.pickKey() } } }
                         }
                     }
                     vif({ ctx.error.isNotEmpty() }) {
@@ -243,26 +241,6 @@ internal class DshConnectionSetupPage : BasePager() {
         }
     }
 
-    private fun pickKey() {
-        busy = true
-        bridgeModule.pickSshKey { uri ->
-            if (uri.isEmpty()) {
-                busy = false
-                return@pickSshKey
-            }
-            bridgeModule.importSshKey(uri) { imported ->
-                setTimeout(pagerId, 0) {
-                    busy = false
-                    if (imported.isEmpty()) error = "无法导入 SSH 私钥"
-                    else {
-                        keyId = imported
-                        keyLabel = "已导入 SSH 私钥"
-                        error = ""
-                    }
-                }
-            }
-        }
-    }
 
     private fun continueToHost() {
         fingerprintPending = ""
@@ -275,36 +253,22 @@ internal class DshConnectionSetupPage : BasePager() {
             openHome()
             return
         }
-        val ssh = sshPort.toIntOrNull()
-        val dsh = dshPort.toIntOrNull()
         if (!pageData.supportsSshBridge) {
             error = "远程 SSH 模式目前仅支持 Android 和 iOS"
             return
         }
-        when {
-            host.isBlank() -> error = "请输入 SSH 主机地址"
-            user.isBlank() -> error = "请输入 SSH 用户名"
-            ssh == null || ssh !in 1..65535 -> error = "SSH 端口无效"
-            dsh == null || dsh !in 1..65535 -> error = "远程 DSH 端口无效"
-            keyId.isBlank() -> error = "请先导入 SSH 私钥"
-            else -> {
-                busy = true
-                bridgeModule.validateSshKey(keyId) { valid ->
-                    setTimeout(pagerId, 0) {
-                        if (!valid) {
-                            busy = false
-                            error = "SSH 私钥不存在或格式无法识别"
-                            return@setTimeout
-                        }
-                        val profile = DshRemoteProfile(
-                            host = host.trim(), sshPort = ssh, username = user.trim(),
-                            remoteDshPort = dsh, keyId = keyId, hostFingerprint = sshFingerprint,
-                        )
-                        runCatching { localStore?.saveRemoteProfile(profile) }
-                        runCatching { localStore?.saveLastConnectionMode(DshConnectionMode.SSH) }
-                        probeRemote(profile)
-                    }
+        val profile = form.validate() ?: return
+        busy = true
+        bridgeModule.validateSshKey(profile.keyId) { valid ->
+            setTimeout(pagerId, 0) {
+                if (!valid) {
+                    busy = false
+                    error = "SSH 私钥不存在或格式无法识别"
+                    return@setTimeout
                 }
+                runCatching { localStore?.saveRemoteProfile(profile) }
+                runCatching { localStore?.saveLastConnectionMode(DshConnectionMode.SSH) }
+                probeRemote(profile)
             }
         }
     }
@@ -313,20 +277,13 @@ internal class DshConnectionSetupPage : BasePager() {
         val module = acquireModule<DshEngineModule>(DshEngineModule.MODULE_NAME)
         engineModule = module
         error = "正在连接 SSH 并检查远程 DSH"
-        module.startSsh(DshSshConfig(
-            host = profile.host,
-            port = profile.sshPort,
-            username = profile.username,
-            remoteDshPort = profile.remoteDshPort,
-            keyId = profile.keyId,
-            hostFingerprint = profile.hostFingerprint,
-        )) { state ->
+        module.startSsh(form.toSshConfig(profile)) { state ->
             when (state.phase) {
                 DshSshPhase.FINGERPRINT_REQUIRED -> {
                     busy = false
                     fingerprintPending = state.message
                     error = "首次连接需要确认主机指纹：${state.message}"
-                    sshFingerprint = state.message
+                    form.fingerprint = state.message
                 }
                 DshSshPhase.READY -> {
                         val repository = DshHostClient(
@@ -366,26 +323,13 @@ internal class DshConnectionSetupPage : BasePager() {
     private fun trustFingerprint() {
         val fingerprint = fingerprintPending
         if (fingerprint.isBlank()) return
-        sshFingerprint = fingerprint
+        form.fingerprint = fingerprint
         engineModule?.trustSshFingerprint(fingerprint)
-        localStore?.saveRemoteProfile(DshRemoteProfile(
-            host = host.trim(),
-            sshPort = sshPort.toIntOrNull() ?: 22,
-            username = user.trim(),
-            remoteDshPort = dshPort.toIntOrNull() ?: 3080,
-            keyId = keyId,
-            hostFingerprint = fingerprint,
-        ))
+        val profile = form.toProfile()
+        localStore?.saveRemoteProfile(profile)
         fingerprintPending = ""
         error = ""
-        probeRemote(DshRemoteProfile(
-            host = host.trim(),
-            sshPort = sshPort.toIntOrNull() ?: 22,
-            username = user.trim(),
-            remoteDshPort = dshPort.toIntOrNull() ?: 3080,
-            keyId = keyId,
-            hostFingerprint = fingerprint,
-        ))
+        probeRemote(profile)
     }
 
     private fun openHome() {
