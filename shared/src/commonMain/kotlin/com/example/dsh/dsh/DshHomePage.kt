@@ -156,6 +156,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 workspaces.handleBack() -> Unit
                 connection.settingsVisible -> connection.closeSettings()
                 credentials.visible -> closeCredentialSettings()
+                settingsPageVisible -> closeSettingsPage()
                 models.visible -> models.visible = false
                 attachmentMenuVisible -> attachmentMenuVisible = false
                 sessionDrawerVisible -> closeSessionDrawer()
@@ -226,6 +227,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                     DshTopBar(
                         title = { ctx.sessions.firstOrNull { it.id == ctx.activeSessionId }?.title ?: "DeepSeek Harness" },
                         connection = { ctx.connectionLabel },
+                        ready = { ctx.connection.ready },
                     )
                 }
 
@@ -463,7 +465,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             sessionRunning = { ctx.sessionRunning },
             isBlankConversation = { ctx.isBlankSession() },
             conversationListEpoch = { ctx.sessionStore.epochFor(it) },
-            turnReconnecting = { isReconnectLabel(ctx.connectionLabel) },
+            turnReconnecting = { ctx.connection.reconnecting },
             turnElapsedMs = { ctx.turnStatus.elapsedMs },
             availableWidth = availableWidth,
         )

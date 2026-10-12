@@ -57,11 +57,13 @@ internal class DshStreamingTurnController(
     private val pendingDelta = StringBuilder()
     private var flushScheduled = false
     private var handle: DshStreamHandle? = null
+    private var observerRevision = 0L
 
     /** A prompt from this device is painting; a host "running" resync would only flicker. */
     fun isLocalPromptInFlight(): Boolean = streaming && rootId.isNotEmpty()
 
     fun send(client: DshHostClient, sessionId: String, prompt: String, assistantId: String) {
+        val revision = ++observerRevision
         val rows = messages()
         val turnReasoningId = "$assistantId-reasoning"
         anchorAssistantId = rows.lastOrNull(::dshIsLiveAssistantText)?.id.orEmpty()
@@ -82,11 +84,12 @@ internal class DshStreamingTurnController(
             sessionId = sessionId,
             prompt = prompt,
             onDelta = { delta, isReasoning ->
+                if (revision != observerRevision || activeSessionId != sessionId) return@streamReply
                 if (isReasoning) queueReasoningDelta(turnReasoningId, delta)
                 else queueAssistantDelta(assistantId, delta)
             },
-            onComplete = { result -> complete(sessionId, result) },
-            onError = { error -> fail(sessionId, error, "ui.prompt-interrupt") },
+            onComplete = { result -> if (revision == observerRevision && activeSessionId == sessionId) complete(sessionId, result) },
+            onError = { error -> if (revision == observerRevision && activeSessionId == sessionId) fail(sessionId, error, "ui.prompt-interrupt") },
         )
     }
 
@@ -106,8 +109,9 @@ internal class DshStreamingTurnController(
 
     /** Drop the stream without a final row; the next session must not receive its deltas. */
     fun cancelForSessionSwitch() {
+        observerRevision++
         if (!streaming && !stopButtonVisible) return
-        handle?.cancel()
+        handle?.detach()
         handle = null
         val partial = liveContent + pendingDelta.toString()
         if (liveId.isNotEmpty()) updateLiveRow(partial, streaming = false)
@@ -128,7 +132,8 @@ internal class DshStreamingTurnController(
 
     /** Engine stopped or disconnected. */
     fun detach() {
-        handle?.cancel()
+        observerRevision++
+        handle?.detach()
         handle = null
     }
 
@@ -215,10 +220,11 @@ internal class DshStreamingTurnController(
 
     private fun attachAdopted(sessionId: String) {
         val client = hostClient ?: return
+        val revision = ++observerRevision
         handle = client.adoptLiveStream(
             sessionId = sessionId,
             onDelta = { delta, isReasoning ->
-                if (!listener.isConnectionActive() || activeSessionId != sessionId) return@adoptLiveStream
+                if (revision != observerRevision || !listener.isConnectionActive() || activeSessionId != sessionId) return@adoptLiveStream
                 if (isReasoning) {
                     val id = reasoningId.ifEmpty { "$rootId-reasoning" }
                     if (reasoningId.isEmpty()) reasoningId = id
@@ -230,8 +236,8 @@ internal class DshStreamingTurnController(
                     queueAssistantDelta(rootId, delta)
                 }
             },
-            onComplete = { result -> complete(sessionId, result) },
-            onError = { error -> fail(sessionId, error, "ui.adopt-interrupt") },
+            onComplete = { result -> if (revision == observerRevision && activeSessionId == sessionId) complete(sessionId, result) },
+            onError = { error -> if (revision == observerRevision && activeSessionId == sessionId) fail(sessionId, error, "ui.adopt-interrupt") },
         )
     }
 

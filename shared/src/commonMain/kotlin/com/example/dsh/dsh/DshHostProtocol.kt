@@ -113,8 +113,8 @@ internal object DshWebTimelineParser {
                 "tool/result" -> {
                     val message = data.optJSONObject("message")
                     val resultBlock = message?.optJSONArray("content")?.optJSONObject(0)
-                    val callId = resultBlock?.optString("toolCallId")
-                        ?: message?.optJSONObject("source")?.optString("callId")
+                    val callId = resultBlock?.optString("toolCallId")?.takeIf { it.isNotEmpty() }
+                        ?: message?.optJSONObject("source")?.optString("callId")?.takeIf { it.isNotEmpty() }
                         ?: data.optString("callId")
                     val previous = toolModels[callId]
                     val settled = DshRemoteToolCallModels.settleHistoryResult(previous, entry) ?: continue

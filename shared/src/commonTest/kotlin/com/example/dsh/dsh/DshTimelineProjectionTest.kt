@@ -142,5 +142,15 @@ class DshTimelineProjectionTest {
         assertEquals("", dshToolResultCallId(JSONObject("""{"type":"x"}""")))
     }
 
+    @Test
+    fun emptyResultIdFallsBackToSourceAndTopLevelIds() {
+        assertEquals("source", dshToolResultCallId(JSONObject(
+            """{"data":{"callId":"top","message":{"source":{"callId":"source"},"content":[{}]}}}""",
+        )))
+        assertEquals("top", dshToolResultCallId(JSONObject(
+            """{"data":{"callId":"top","message":{"source":{"callId":""},"content":[{"toolCallId":""}]}}}""",
+        )))
+    }
+
     private fun event(seq: Int, raw: String) = DshRawSessionEvent(seq, "user/message", raw)
 }

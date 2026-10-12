@@ -60,6 +60,13 @@ internal class DshConnectionController(
     val sessionScope: DshSessionScope
         get() = DshSessionScope(mode, remoteProfileId)
 
+    var runtimePhase by observable(DshHostRuntimePhase.DISCONNECTED)
+        private set
+    var reconnecting by observable(false)
+        private set
+    val ready: Boolean get() = runtimePhase == DshHostRuntimePhase.READY
+    private var recovery = DshConnectionRecovery()
+
     private val coordinator = DshConnectionCoordinator()
     private var engineModule: DshEngineModule? = null
     private var relayEndpoint = ""
@@ -86,6 +93,8 @@ internal class DshConnectionController(
         coordinator.stop()
         client?.stop()
         client = null
+        runtimePhase = DshHostRuntimePhase.STOPPED
+        reconnecting = false
         when (active) {
             DshConnectionMode.RELAY -> relayModule().disconnect()
             DshConnectionMode.SSH -> engineModule?.stopSsh()
@@ -104,7 +113,9 @@ internal class DshConnectionController(
 
     fun handleRuntimeState(state: DshHostRuntimeState) {
         if (!isActive()) return
-        val wasReconnecting = isReconnectLabel(statusLabel)
+        runtimePhase = state.phase
+        val recovered = recovery.accept(state)
+        reconnecting = recovery.reconnecting
         statusLabel = when (state.phase) {
             DshHostRuntimePhase.CONNECTING -> "正在打开远程事件流"
             DshHostRuntimePhase.HOST_HANDSHAKE -> "正在检查远程 DSH"
@@ -115,7 +126,7 @@ internal class DshConnectionController(
             DshHostRuntimePhase.STOPPED -> "远程 DSH 已停止"
             DshHostRuntimePhase.DISCONNECTED -> "等待远程连接"
         }
-        if (state.phase == DshHostRuntimePhase.READY && wasReconnecting) {
+        if (recovered) {
             listener.onClientReconnected()
         }
         listener.onTransportStateChanged()
@@ -252,6 +263,9 @@ internal class DshConnectionController(
     }
 
     private fun connectHost(baseUrl: String, token: String = "") {
+        recovery = DshConnectionRecovery()
+        runtimePhase = DshHostRuntimePhase.CONNECTING
+        reconnecting = false
         client?.stop()
         client = createClient(DshHostConnection(baseUrl, token))
         listener.onClientConnected()

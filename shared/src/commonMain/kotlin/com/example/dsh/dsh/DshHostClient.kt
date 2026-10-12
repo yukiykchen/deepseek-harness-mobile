@@ -72,7 +72,10 @@ internal class DshHostClient(
 
     fun currentConnectionState(): DshHostRuntimeState = runtime.currentState()
     fun isProductReady(): Boolean = runtime.currentState().phase == DshHostRuntimePhase.READY
-    fun stop() = runtime.stop()
+    fun stop() {
+        activeStreams.clear()
+        runtime.stop()
+    }
 
     fun respondApproval(
         rpcId: String,
@@ -670,36 +673,8 @@ internal class DshHostClient(
         )
     }
 
-    fun streamReply(pagerId: String, sessionId: String, prompt: String, onDelta: (String) -> Unit, onComplete: (String) -> Unit, onError: (String) -> Unit): DshStreamHandle {
-        val call = runtime.call(DshHostProtocol.SESSION_PROMPT, JSONObject().apply {
-            put("sessionId", sessionId); put("mode", "queue")
-            put("content", JSONArray().apply { put(JSONObject().apply { put("type", "text"); put("text", prompt) }) })
-            put("clientTimeZone", "UTC")
-        }) { value, error, rpcId ->
-            if (error != null) {
-                if (dshIsTransportInterrupt(error.code, error.message)) {
-                    DshStreamLog.i("prompt.hold-for-resync session=$sessionId rpcId=$rpcId code=${error.code}")
-                    return@call
-                }
-                activeStreams.remove(rpcId); onError(error.message); return@call
-            }
-            val command = value?.optJSONObject("command")
-            if (command != null) {
-                activeStreams.remove(rpcId); onComplete(command.optString("text"))
-            }
-        }
-        activeStreams[call.rpcId] = ActiveStream(sessionId, call.rpcId, { text, _ -> onDelta(text) }, onComplete, onError)
-        return object : DshStreamHandle {
-            private var cancelled = false
-            override fun cancel() {
-                if (cancelled) return
-                cancelled = true
-                activeStreams.remove(call.rpcId)
-                call.cancel()
-                runtime.call(DshHostProtocol.SESSION_CANCEL, JSONObject().apply { put("sessionId", sessionId) }) { _, _, _ -> }
-            }
-        }
-    }
+    fun streamReply(pagerId: String, sessionId: String, prompt: String, onDelta: (String) -> Unit, onComplete: (String) -> Unit, onError: (String) -> Unit): DshStreamHandle =
+        streamReply(pagerId, sessionId, prompt, { text, _ -> onDelta(text) }, onComplete, onError)
 
     fun streamReply(
         pagerId: String,
@@ -714,6 +689,7 @@ internal class DshHostClient(
             put("content", JSONArray().apply { put(JSONObject().apply { put("type", "text"); put("text", prompt) }) })
             put("clientTimeZone", "UTC")
         }) { value, error, rpcId ->
+            if (!activeStreams.containsKey(rpcId)) return@call
             if (error != null) {
                 if (dshIsTransportInterrupt(error.code, error.message)) {
                     DshStreamLog.i("prompt.hold-for-resync session=$sessionId rpcId=$rpcId code=${error.code}")
@@ -728,16 +704,17 @@ internal class DshHostClient(
         }
         activeStreams[call.rpcId] = ActiveStream(sessionId, call.rpcId, onDelta, onComplete, onError)
         DshStreamLog.i("prompt.start session=$sessionId rpcId=${call.rpcId} promptChars=${prompt.length} prompt='${DshStreamLog.preview(prompt)}'")
-        return object : DshStreamHandle {
-            private var cancelled = false
-            override fun cancel() {
-                if (cancelled) return
-                cancelled = true
-                activeStreams.remove(call.rpcId)
+        return DshTurnSubscription(
+            onDetach = { activeStreams.remove(call.rpcId) },
+            onCancel = {
                 call.cancel()
-                runtime.call(DshHostProtocol.SESSION_CANCEL, JSONObject().apply { put("sessionId", sessionId) }) { _, _, _ -> }
-            }
-        }
+                cancelTurn(sessionId)
+            },
+        )
+    }
+
+    fun cancelTurn(sessionId: String) {
+        runtime.call(DshHostProtocol.SESSION_CANCEL, JSONObject().apply { put("sessionId", sessionId) }) { _, _, _ -> }
     }
 
     fun adoptLiveStream(
@@ -750,15 +727,10 @@ internal class DshHostClient(
         val rpcId = "adopted-$sessionId"
         activeStreams[rpcId] = ActiveStream(sessionId, rpcId, onDelta, onComplete, onError)
         DshStreamLog.i("prompt.adopt-live session=$sessionId rpcId=$rpcId")
-        return object : DshStreamHandle {
-            private var cancelled = false
-            override fun cancel() {
-                if (cancelled) return
-                cancelled = true
-                activeStreams.remove(rpcId)
-                runtime.call(DshHostProtocol.SESSION_CANCEL, JSONObject().apply { put("sessionId", sessionId) }) { _, _, _ -> }
-            }
-        }
+        return DshTurnSubscription(
+            onDetach = { activeStreams.remove(rpcId) },
+            onCancel = { cancelTurn(sessionId) },
+        )
     }
 
     fun detachLiveStreams(sessionId: String) {

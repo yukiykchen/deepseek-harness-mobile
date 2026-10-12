@@ -83,8 +83,8 @@ internal fun dshToolResultCallId(payload: JSONObject): String {
     val data = dshWireEvent(payload).optJSONObject("data") ?: return ""
     val message = data.optJSONObject("message")
     val resultBlock = message?.optJSONArray("content")?.optJSONObject(0)
-    return resultBlock?.optString("toolCallId")
-        ?: message?.optJSONObject("source")?.optString("callId")
+    return resultBlock?.optString("toolCallId")?.takeIf { it.isNotEmpty() }
+        ?: message?.optJSONObject("source")?.optString("callId")?.takeIf { it.isNotEmpty() }
         ?: data.optString("callId")
 }
 

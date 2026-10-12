@@ -550,5 +550,29 @@ internal data class DshSessionModels(
 )
 
 internal interface DshStreamHandle {
+    /** Releases the observer without stopping the Host turn. */
+    fun detach()
+    /** Explicit user command: releases the observer and stops the Host turn. */
     fun cancel()
+}
+
+internal class DshTurnSubscription(
+    private val onDetach: () -> Unit,
+    private val onCancel: () -> Unit,
+) : DshStreamHandle {
+    private var detached = false
+    private var cancelled = false
+
+    override fun detach() {
+        if (detached) return
+        detached = true
+        onDetach()
+    }
+
+    override fun cancel() {
+        if (cancelled) return
+        cancelled = true
+        detach()
+        onCancel()
+    }
 }
