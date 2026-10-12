@@ -43,4 +43,12 @@ class DshRequestAndEventTest {
         assertTrue(store.applyProjection("B", "goal", "goal-state", 12))
         assertEquals("goal-state", store.projections.getValue("B").getValue("goal").value)
     }
+    @Test
+    fun reusedSshProfileSlotDoesNotShareCacheAcrossHosts() {
+        val profile = DshRemoteProfile(host = "one.example", sshPort = 22, username = "user", remoteDshPort = 3080, keyId = "key")
+        assertNotEquals(profile.cacheProfileId(), profile.copy(host = "two.example").cacheProfileId())
+        assertNotEquals(profile.cacheProfileId(), profile.copy(username = "other").cacheProfileId())
+        assertEquals(profile.cacheProfileId(), profile.copy(host = " ONE.EXAMPLE ").cacheProfileId())
+    }
+
 }

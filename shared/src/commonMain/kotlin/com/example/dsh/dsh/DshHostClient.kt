@@ -908,6 +908,7 @@ internal class DshHostClient(
     private fun resolveActiveStream(sessionId: String, type: String, rpcId: String): ActiveStream? {
         if (rpcId.isNotEmpty()) {
             activeStreams[rpcId]?.takeIf { it.sessionId == sessionId }?.let { return it }
+            return activeStreams["adopted-$sessionId"]?.takeIf { it.sessionId == sessionId }
         }
         return activeStreams.values.lastOrNull { it.sessionId == sessionId }
     }

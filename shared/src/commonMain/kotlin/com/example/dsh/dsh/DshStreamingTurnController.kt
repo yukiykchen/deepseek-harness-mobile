@@ -109,7 +109,12 @@ internal class DshStreamingTurnController(
     /** Drop the stream without a final row; the next session must not receive its deltas. */
     fun cancelForSessionSwitch() {
         observerRevision++
-        if (!streaming && !stopButtonVisible) return
+        if (!streaming && !stopButtonVisible) {
+            handle?.detach()
+            handle = null
+            release()
+            return
+        }
         handle?.detach()
         handle = null
         val partial = liveContent + pendingDelta.toString()

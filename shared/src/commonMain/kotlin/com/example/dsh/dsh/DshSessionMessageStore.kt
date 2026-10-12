@@ -59,7 +59,11 @@ internal class DshSessionMessageStore(
 
     init {
         readScope.launch {
-            try { for (task in storageTasks) task() }
+            try {
+                for (task in storageTasks) runCatching { task() }.onFailure {
+                    DshStreamLog.i("cache.task-failed message=${it.message}")
+                }
+            }
             finally { readScope.cancel() }
         }
     }

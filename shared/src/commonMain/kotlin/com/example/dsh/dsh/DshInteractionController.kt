@@ -47,6 +47,14 @@ internal class DshInteractionController(
     fun refresh() {
         val client = ctx.hostClient ?: return
         val (approval, question) = client.pendingInteractions(ctx.activeSessionId)
+        if (pendingApproval?.rpcId != approval?.rpcId || pendingQuestion?.rpcId != question?.rpcId) {
+            busy = false
+            drafts.clear()
+            selectedOptions.clear()
+            custom = ""
+            error = ""
+            index = 0
+        }
         pendingApproval = approval
         pendingQuestion = question
         index = index.coerceIn(0, (question?.questions?.size ?: 1) - 1)

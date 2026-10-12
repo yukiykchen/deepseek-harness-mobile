@@ -37,6 +37,11 @@ internal data class DshRemoteProfile(
     val hostFingerprint: String = "",
 )
 
+/** Cache identity follows the SSH endpoint, rather than a reused editable profile slot. */
+internal fun DshRemoteProfile.cacheProfileId(): String = listOf(
+    profileId, host.trim().lowercase(), sshPort.toString(), username.trim(), remoteDshPort.toString(),
+).joinToString(":") { it.replace("%", "%25").replace(":", "%3A") }
+
 internal enum class DshSessionCacheState {
     SYNCED,
     STALE,

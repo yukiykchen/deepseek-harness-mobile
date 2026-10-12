@@ -217,7 +217,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         )
         restoreCachedSessions()
         if (sessions.isEmpty()) {
-
             ensureConversationPanel(activeSessionId)
         }
         dshPerfLog("startup.restoreCachedSessions.done", startedAt)
@@ -639,9 +638,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 applyActiveSessionChrome()
                 models.load(activeSessionId)
                 loadHistory(activeSessionId, scrollToEndAfterLoad = false)
-                if (turn.streaming || turn.stopButtonVisible || sessionRunning) {
-                    resyncStreamingWithHost(activeSessionId, "session-list")
-                }
             } else {
                 preferBlankHomeOnNextLoad = false
                 sessionStore.replace(activeSessionId, emptyList())
@@ -847,7 +843,11 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         scrollToEndAfterLoad: Boolean = true,
     ) {
         loadSkills(sessionId)
-        loadWebTimeline(sessionId, scrollToEndAfterLoad)
+        if (sessionRunning || turn.streaming || turn.stopButtonVisible) {
+            resyncStreamingWithHost(sessionId, "session-selection")
+        } else {
+            loadWebTimeline(sessionId, scrollToEndAfterLoad)
+        }
     }
 
     private fun loadWebTimeline(
@@ -959,59 +959,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         sessionStore.update(activeSessionId, model.toRemoteMessage(messages[index].id))
     }
 
-    private fun renameActiveSession() {
-        val client = hostClient ?: return
-        val current = sessions.firstOrNull { it.id == activeSessionId } ?: return
-        val title = current.title.takeIf { it != "尚无标题" && it != "新会话" } ?: ""
-        if (title.isBlank()) return
-        client.renameSession(activeSessionId, title) { _, _ ->
-            setTimeout(pagerId, 0) { loadRepository(preferredSessionId = activeSessionId) }
-        }
-    }
-
-    private fun archiveActiveSession() {
-        val client = hostClient ?: return
-        client.archiveSession(activeSessionId) { _, _ ->
-            setTimeout(pagerId, 0) {
-                loadRepository(preferredSessionId = null)
-                workspaces.refreshGroups()
-            }
-        }
-    }
-
-    private fun forkActiveSession() {
-        val client = hostClient ?: return
-        val lastSeq = client.store.sessionLastSeq[activeSessionId]
-        client.forkSession(activeSessionId, lastSeq) { value, error ->
-            if (error != null || value == null) {
-                setTimeout(pagerId, 0) {
-                    sessionStore.append(activeSessionId, DshMessage(
-                        "fork-error-${messages.size}",
-                        DshMessageRole.ERROR,
-                        error?.message ?: "session.fork failed",
-                    ))
-                }
-                return@forkSession
-            }
-            val childSessionId = value.optString("sessionId")
-            setTimeout(pagerId, 0) {
-                if (childSessionId.isNotEmpty()) loadRepository(preferredSessionId = childSessionId)
-            }
-        }
-    }
-
-    private fun exportActiveSession() {
-        val client = hostClient ?: return
-        val url = client.sessionExportUrl(activeSessionId)
-        acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(
-            "link_view",
-            JSONObject().apply {
-                put("pageName", "link_view")
-                put("url", url)
-            },
-        )
-    }
-
     private fun restoreCachedSessions() {
         val store = localStore ?: return
         val cached = runCatching { store.loadSessions(activeConnectionId) }.getOrDefault(emptyList())
@@ -1081,11 +1028,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         if (id == activeSessionId) return
         dshPerfLog("switch.$traceId.mounted.begin", startedAt)
         scroller.refresh(id)
-        turn.cancelForSessionSwitch()
-
         sessionStore.state(id, loadFromDisk = false)
         ensureConversationPanel(id)
         selectActiveSession(id)
+        applyActiveSessionChrome()
         dshPerfLog("switch.$traceId.active-state-swapped", startedAt)
         scroller.scrollToEnd()
         addTaskWhenPagerUpdateLayoutFinish {
@@ -1103,7 +1049,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         }
         draft = ""
         inputView?.setText("")
-        applyActiveSessionChrome()
         dshPerfLog("switch.$traceId.end", startedAt)
     }
 
@@ -1111,6 +1056,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         sessions.firstOrNull { it.id == sessionId }?.blank == true
 
     private fun applyActiveSessionChrome() {
+        sessionRunning = hostClient?.store?.sessions?.get(activeSessionId)?.running
+            ?: (sessions.firstOrNull { it.id == activeSessionId }?.running == true)
+        turnStatus.sync()
         interactions.reset()
         goal.clearSnapshot()
         hostClient?.store?.projections?.get(activeSessionId)?.get("goal")?.value?.let(goal::applyProjection)
@@ -1137,12 +1085,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             scroller.refresh(sessionId)
             if (scrollToEndAfterLoad && activeSessionId == sessionId) scroller.scrollToEnd()
         }
-    }
-
-    private fun loadCachedHistory(sessionId: String) {
-        sessionStore.state(sessionId, loadFromDisk = false)
-        ensureConversationPanel(sessionId)
-        sessionStore.loadFromDisk(sessionId)
     }
 
     private fun completePendingSessionSelection(sessionId: String) {

@@ -45,6 +45,7 @@ internal class DshConnectionController(
     var mode by observable(DshConnectionMode.RELAY)
         private set
     private var settingsMode by observable(DshConnectionMode.RELAY)
+    private var sshCacheIdentity by observable(DshSessionScope.DEFAULT_REMOTE_PROFILE_ID)
     var remoteProfileId by observable(DshSessionScope.DEFAULT_REMOTE_PROFILE_ID)
         private set
     /** Connection status shown in the top bar; the page also writes turn progress here. */
@@ -60,7 +61,7 @@ internal class DshConnectionController(
         get() = settingsMode == DshConnectionMode.SSH
 
     val sessionScope: DshSessionScope
-        get() = DshSessionScope(mode, remoteProfileId)
+        get() = DshSessionScope(mode, if (mode == DshConnectionMode.SSH) sshCacheIdentity else remoteProfileId)
 
     var runtimePhase by observable(DshHostRuntimePhase.DISCONNECTED)
         private set
@@ -79,7 +80,9 @@ internal class DshConnectionController(
         this.mode = mode
         settingsMode = mode
         remoteProfileId = profileId
-        sshForm.load(runCatching { localStore()?.loadRemoteProfile() }.getOrNull())
+        val profile = runCatching { localStore()?.loadRemoteProfile() }.getOrNull()
+        sshForm.load(profile)
+        sshCacheIdentity = profile?.cacheProfileId() ?: profileId
     }
 
     /** False once the connection was stopped or switched; drop late callbacks then. */
@@ -171,6 +174,7 @@ internal class DshConnectionController(
         }
         listener.beforeConnectionChange()
         mode = settingsMode
+        if (sshMode) sshCacheIdentity = sshForm.toProfile().cacheProfileId()
         remoteProfileId = if (sshMode) {
             runCatching { localStore()?.loadRemoteProfile()?.profileId }.getOrNull() ?: DshSessionScope.DEFAULT_REMOTE_PROFILE_ID
         } else {
