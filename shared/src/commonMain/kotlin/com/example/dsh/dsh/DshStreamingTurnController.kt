@@ -167,6 +167,7 @@ internal class DshStreamingTurnController(
     fun finishFromHistory(sessionId: String) {
         if (!(streaming || stopButtonVisible)) return
         flush()
+        rebindReasoningFromHistory()
         if (rebindToHistoryTail()) {
             settle(DshMessageRole.ASSISTANT, liveContent)
         } else {
@@ -181,6 +182,7 @@ internal class DshStreamingTurnController(
     fun resumeFromHistory(sessionId: String, reason: String) {
         if (sessionId != activeSessionId) return
         val rows = messages()
+        rebindReasoningFromHistory()
         val rebound = rebindToHistoryTail()
         if (rebound) {
             streaming = true
@@ -272,6 +274,14 @@ internal class DshStreamingTurnController(
         listener.persist(sessionId)
         listener.onStatusLabel("已连接")
         handle = null
+    }
+
+    private fun rebindReasoningFromHistory() {
+        val rows = messages()
+        val userIndex = rows.indexOfLast { it.role == DshMessageRole.USER }
+        val reasoning = rows.drop(userIndex + 1).lastOrNull { it.isReasoning }
+        reasoningId = reasoning?.id.orEmpty()
+        reasoningContent = reasoning?.content.orEmpty()
     }
 
     private fun rebindToHistoryTail(): Boolean {

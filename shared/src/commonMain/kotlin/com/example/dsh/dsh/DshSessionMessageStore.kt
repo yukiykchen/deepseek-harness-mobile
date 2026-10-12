@@ -244,7 +244,7 @@ internal class DshSessionMessageStore(
         dshPerfLog("$trace.sqlite.end:$sessionId messages=${loaded.size} query=${queryMs}ms", queuedAt)
         if (closed) return
         setTimeout(pagerId, 0) {
-            if (closed || scopeId != capturedScope || scopeRevision != revision || states[sessionId] !== target) return@setTimeout
+            if (closed || connectionId() != capturedScope || scopeId != capturedScope || scopeRevision != revision || states[sessionId] !== target) return@setTimeout
             pendingReads.remove(sessionId)
             val state = target
             ready.add(sessionId)

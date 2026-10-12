@@ -252,7 +252,7 @@ internal class DshConnectionController(
     }
 
     private fun startSsh(generation: Long) {
-        if (!sshForm.isConfigured) {
+        if (!sshForm.isConfigured && preparedSshId.isEmpty()) {
             statusLabel = "请配置 SSH 连接"
             openSettings()
             return

@@ -172,7 +172,7 @@ internal class DshHostStore {
             val previous = old[next.id]
             val titleProjection = projections[next.id]?.get("title")?.value?.trim()?.removeSurrounding("\"")
             sessions[next.id] = if (previous == null) next.copy(title = titleProjection ?: next.title) else next.copy(
-                title = titleProjection ?: previous.title.takeUnless { it == "尚无标题" } ?: next.title,
+                title = titleProjection ?: next.title.takeUnless { it == "尚无标题" } ?: previous.title,
                 blank = next.blank,
                 subscribedLastSeq = maxOf(previous.subscribedLastSeq, next.subscribedLastSeq),
             )

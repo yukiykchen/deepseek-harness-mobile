@@ -288,7 +288,7 @@ internal class DshConnectionSetupPage : BasePager() {
             })
             put("profileId", when (connectionMode) {
                 DshConnectionMode.RELAY -> relayHostId.ifEmpty { DshSessionScope.DEFAULT_REMOTE_PROFILE_ID }
-                else -> DshSessionScope.DEFAULT_REMOTE_PROFILE_ID
+                else -> form.toProfile().cacheProfileId()
             })
         })
     }

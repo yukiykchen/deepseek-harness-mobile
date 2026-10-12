@@ -51,4 +51,12 @@ class DshRequestAndEventTest {
         assertEquals(profile.cacheProfileId(), profile.copy(host = " ONE.EXAMPLE ").cacheProfileId())
     }
 
+    @Test
+    fun freshCatalogTitleReplacesCachedTitleWithoutAProjection() {
+        val store = DshHostStore()
+        store.replaceSessions(listOf(DshSession("A", "old", "Host", "")))
+        store.replaceSessions(listOf(DshSession("A", "new", "Host", "")))
+        assertEquals("new", store.sessions.getValue("A").title)
+    }
+
 }
