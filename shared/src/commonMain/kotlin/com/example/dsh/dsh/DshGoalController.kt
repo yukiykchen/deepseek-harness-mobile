@@ -37,9 +37,8 @@ internal class DshGoalController(private val ctx: DshHomeContext) : PagerScope b
         client.goalEdit(ctx.activeSessionId, goal, objective, callback)
     }
 
-    fun clear() = mutate { client, goal, callback ->
+    fun clear() = mutate(onDone = { accepted -> if (accepted) snapshot = null }) { client, goal, callback ->
         client.goalClear(ctx.activeSessionId, goal) { rpcError ->
-            if (rpcError == null) snapshot = null
             callback(rpcError)
         }
     }
@@ -49,12 +48,13 @@ internal class DshGoalController(private val ctx: DshHomeContext) : PagerScope b
         action: (DshHostClient, DshGoalSnapshot, (DshRpcError?) -> Unit) -> Unit,
     ) {
         val goal = snapshot ?: return
-        val client = ctx.hostClient ?: return
+        val request = ctx.captureRequest() ?: return
         if (busy) return
         busy = true
         error = ""
-        action(client, goal) { rpcError ->
+        action(request.client, goal) { rpcError ->
             setTimeout(pagerId, 0) {
+                if (!request.isCurrent()) return@setTimeout
                 busy = false
                 error = if (rpcError != null) "${rpcError.message} (${rpcError.code})" else ""
                 onDone(rpcError == null)

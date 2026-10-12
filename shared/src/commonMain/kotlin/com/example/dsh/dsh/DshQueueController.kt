@@ -18,6 +18,13 @@ internal class DshQueueController(private val ctx: DshHomeContext) : PagerScope 
     var editingText by observable("")
         private set
 
+    fun reset() {
+        actionBusy = false
+        expanded = false
+        items.clear()
+        cancelEdit()
+    }
+
     fun refresh() {
         val client = ctx.hostClient ?: return
         val next = client.queue(ctx.activeSessionId)
@@ -44,12 +51,12 @@ internal class DshQueueController(private val ctx: DshHomeContext) : PagerScope 
     }
 
     fun save(itemId: String) {
-        val client = ctx.hostClient ?: return
+        val request = ctx.captureRequest() ?: return
         val text = editingText.trim()
         if (actionBusy || itemId != editingId || text.isEmpty()) return
         actionBusy = true
-        client.updateQueue(
-            sessionId = ctx.activeSessionId,
+        request.client.updateQueue(
+            sessionId = request.sessionId,
             itemId = itemId,
             action = JSONObject().apply {
                 put("kind", "edit")
@@ -57,6 +64,7 @@ internal class DshQueueController(private val ctx: DshHomeContext) : PagerScope 
             },
         ) { _, _ ->
             setTimeout(pagerId, 0) {
+                if (!request.isCurrent()) return@setTimeout
                 actionBusy = false
                 cancelEdit()
                 refresh()
@@ -78,15 +86,16 @@ internal class DshQueueController(private val ctx: DshHomeContext) : PagerScope 
     fun steer(itemId: String) = update(itemId, JSONObject().apply { put("kind", "steer") })
 
     private fun update(itemId: String, action: JSONObject) {
-        val client = ctx.hostClient ?: return
+        val request = ctx.captureRequest() ?: return
         if (actionBusy) return
         actionBusy = true
-        client.updateQueue(
-            sessionId = ctx.activeSessionId,
+        request.client.updateQueue(
+            sessionId = request.sessionId,
             itemId = itemId,
             action = action,
         ) { _, _ ->
             setTimeout(pagerId, 0) {
+                if (!request.isCurrent()) return@setTimeout
                 actionBusy = false
                 refresh()
             }

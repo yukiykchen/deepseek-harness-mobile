@@ -788,7 +788,12 @@ internal class DshHostClient(
             }
             "session/projection" -> {
                 val value = payload.optJSONObject("value")?.toString() ?: payload.optString("value")
-                onProjectionHandler(payload.optString("sessionId"), payload.optString("key"), value, payload.optInt("seq", -1))
+                val sessionId = payload.optString("sessionId")
+                val key = payload.optString("key")
+                val seq = payload.optInt("seq", -1)
+                if (store.applyProjection(sessionId, key, value, seq)) {
+                    onProjectionHandler(sessionId, key, value, seq)
+                }
                 return
             }
             "approval/requested", "question/requested" -> {
@@ -829,7 +834,7 @@ internal class DshHostClient(
             put("event", event)
             payload.optJSONObject("view")?.let { put("view", it) }
         }
-        store.applySessionEvent(sessionId, seq, type, eventEnvelope.toString())
+        if (!store.applySessionEvent(sessionId, seq, type, eventEnvelope.toString())) return
         if (seq > -1) onSessionEventHandler(sessionId, DshRawSessionEvent(seq, type, eventEnvelope.toString()))
         val data = event.optJSONObject("data") ?: JSONObject()
         val source = sessionEventSource(data)

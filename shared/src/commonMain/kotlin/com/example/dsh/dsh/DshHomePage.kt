@@ -34,7 +34,13 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         createClient = ::createHostClient,
         listener = object : DshConnectionController.Listener {
             override fun onClientConnected() = loadRepository(preferredSessionId = activeSessionId)
-            override fun onClientReconnected() = loadRepository(preferredSessionId = activeSessionId)
+            override fun onClientReconnected() {
+                models.reset()
+                queue.reset()
+                interactions.reset()
+                goal.reset()
+                loadRepository(preferredSessionId = activeSessionId)
+            }
             override fun onTransportStateChanged() = turnStatus.sync()
             override fun beforeSettingsShown() {
                 dismissKeyboard()
@@ -78,8 +84,13 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private var voiceActive by observable(false)
     private var topBarRef: ViewRef<com.tencent.kuikly.core.views.DivView>? = null
     private var inputView: TextAreaView? = null
-    private var historyRequestGeneration = 0
-    private val pendingSessionSelections = mutableSetOf<String>()
+    override var selectionGeneration = 0L
+        private set
+    private val historyRequests = DshRequestVersion()
+    private val skillRequests = DshRequestVersion()
+    private val catalogRequests = DshRequestVersion()
+    private val pendingSessionSelections = mutableMapOf<String, Long>()
+    private val selectionIntents = DshRequestVersion()
     private var inputFocused = false
     private var perfTraceSequence = 0
     private val queue = DshQueueController(this)
@@ -517,8 +528,14 @@ internal class DshHomePage : BasePager(), DshHomeContext {
 
     private fun loadRepository(preferredSessionId: String? = null) {
         val hostRepository = hostClient ?: return
+        val version = catalogRequests.next()
+        val selection = selectionGeneration
+        val generation = hostRepository.currentConnectionState().generation
+        fun acceptsCatalog() = connection.isActive() && hostClient === hostRepository &&
+            catalogRequests.accepts(version) && selection == selectionGeneration &&
+            hostRepository.currentConnectionState().generation == generation
         hostRepository.loadSessions({ loaded ->
-            if (!connection.isActive()) return@loadSessions
+            if (!acceptsCatalog()) return@loadSessions
             val loadedIds = loaded.map { it.id }.toSet()
             sessions.map { it.id }
                 .filterNot { loadedIds.contains(it) }
@@ -548,11 +565,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                     createSession()
                     return@loadSessions
                 }
-                activeSessionId = nextId
+                selectActiveSession(nextId)
                 sessionRunning = loaded.firstOrNull { it.id == activeSessionId }?.running == true
-                queue.refresh()
-                jobs.refresh()
-                interactions.refresh()
+                applyActiveSessionChrome()
                 models.load(activeSessionId)
                 loadHistory(activeSessionId, scrollToEndAfterLoad = false)
                 if (turn.streaming || turn.stopButtonVisible || sessionRunning) {
@@ -564,7 +579,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 createSession()
             }
         }, { error ->
-            if (!connection.isActive()) return@loadSessions
+            if (!acceptsCatalog()) return@loadSessions
             connectionLabel = "内核连接失败"
             restoreCachedSessions()
             if (sessions.isEmpty()) {
@@ -606,16 +621,15 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                     turnStatus.sync()
                 }
             },
-            onProjection = { sessionId, key, value, seq ->
-                if (sessionId == activeSessionId) {
-                    when (key) {
-                        "title" -> {
-                            val title = value.trim().removeSurrounding("\"")
-                            if (title.isNotEmpty()) connectionLabel = title
-                        }
-                        "goal" -> goal.applyProjection(value)
+            onProjection = { sessionId, key, value, _ ->
+                if (key == "title") {
+                    val index = sessions.indexOfFirst { it.id == sessionId }
+                    if (index >= 0) {
+                        sessions[index] = sessions[index].copy(title = value.trim().removeSurrounding("\""))
+                        refreshVisibleSessions()
                     }
                 }
+                if (sessionId == activeSessionId && key == "goal") goal.applyProjection(value)
             },
             onSessionEvent = { sessionId, event ->
                 if (sessionId == activeSessionId) {
@@ -709,7 +723,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         }
         dshPerfLog("newSession.$traceId.ui.cleared", startedAt)
         dshPerfLog("newSession.$traceId.host.create.request", startedAt)
+        val request = captureRequest() ?: return
         hostRepository.createSession(currentWorkspaceId, { sessionId ->
+            if (!request.isCurrent()) return@createSession
             dshPerfLog("newSession.$traceId.host.create.response:$sessionId", startedAt)
             val created = DshSession(
                 id = sessionId,
@@ -725,7 +741,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 refreshVisibleSessions()
             }
             runCatching { localStore?.replaceSessions(activeConnectionId, sessions.toList()) }
-            activeSessionId = sessionId
+            selectActiveSession(sessionId)
             messages = ObservableList()
             sessionStore.put(sessionId, messages)
             sessionStore.markReady(sessionId)
@@ -741,6 +757,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 }
             }
         }, { error ->
+            if (!request.isCurrent()) return@createSession
             dshPerfLog("newSession.$traceId.host.create.error:$error", startedAt)
             connectionLabel = "新会话创建失败"
             messages.add(DshMessage("session-create-error-${messages.size}", DshMessageRole.ERROR, error))
@@ -751,7 +768,6 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         sessionId: String,
         scrollToEndAfterLoad: Boolean = true,
     ) {
-        ++historyRequestGeneration
 
         // Show the selected session immediately. The Host history request is
         // remote and can take a moment, so keeping the previous list here
@@ -778,9 +794,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         forceReplace: Boolean = false,
         afterApply: () -> Unit = {},
     ) {
-        val hostRepository = hostClient ?: return
-        hostRepository.loadWebTimeline(sessionId, { items ->
-            if (activeSessionId != sessionId) return@loadWebTimeline
+        val request = captureRequest(sessionId) ?: return
+        val version = historyRequests.next()
+        request.client.loadWebTimeline(sessionId, { items ->
+            if (!request.isCurrent() || !historyRequests.accepts(version)) return@loadWebTimeline
             val projected = items.map { it.toMessage() }
             sessionStore.markReady(sessionId)
             replaceMessagesIfChanged(projected, forceReplace)
@@ -792,6 +809,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             realizeSessionAfterData(sessionId, scrollToEndAfterLoad)
             afterApply()
         }, { error ->
+            if (!request.isCurrent() || !historyRequests.accepts(version)) return@loadWebTimeline
             DshStreamLog.i("ui.history-fail session=$sessionId error='${DshStreamLog.preview(error)}'")
             if (forceReplace && !sessionRunning && (turn.streaming || turn.stopButtonVisible)) {
                 turn.finishFromHistory(sessionId)
@@ -828,10 +846,11 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     }
 
     private fun loadSkills(sessionId: String) {
-        val remote = hostClient ?: return
+        val request = captureRequest(sessionId) ?: return
+        val version = skillRequests.next()
         skills.clear()
-        remote.loadSkills(sessionId, onSuccess = { loaded ->
-            if (activeSessionId != sessionId) return@loadSkills
+        request.client.loadSkills(sessionId, onSuccess = { loaded ->
+            if (!request.isCurrent() || !skillRequests.accepts(version)) return@loadSkills
             skills.clear()
             skills.addAll(loaded)
         })
@@ -940,7 +959,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         refreshVisibleSessions()
         val homeId = cached.firstOrNull { it.blank }?.id
         if (homeId != null) {
-            activeSessionId = homeId
+            selectActiveSession(homeId)
             val state = sessionStore.state(homeId, loadFromDisk = false)
             state.clear()
             sessionStore.markReady(homeId)
@@ -955,7 +974,22 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         ensureConversationPanel(activeSessionId)
     }
 
-    private fun selectSession(id: String) {
+    private fun selectActiveSession(id: String) {
+        if (activeSessionId == id) return
+        selectionGeneration++
+        historyRequests.invalidate()
+        skillRequests.invalidate()
+        turn.cancelForSessionSwitch()
+        activeSessionId = id
+        models.reset()
+        queue.reset()
+        interactions.reset()
+        goal.reset()
+    }
+
+    private fun selectSession(id: String, intent: Long = selectionIntents.next()) {
+        if (!selectionIntents.accepts(intent)) return
+        pendingSessionSelections.clear()
         val traceId = ++perfTraceSequence
         val startedAt = TimeSource.Monotonic.markNow()
         dshPerfLog("switch.$traceId.request:$id", startedAt)
@@ -965,7 +999,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             return
         }
         if (!sessionStore.isReady(id)) {
-            pendingSessionSelections.add(id)
+            pendingSessionSelections[id] = intent
             dshPerfLog("switch.$traceId.wait-data", startedAt)
             return
         }
@@ -973,7 +1007,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             ensureConversationPanel(id)
             addTaskWhenPagerUpdateLayoutFinish {
                 dshPerfLog("switch.$traceId.panel.layout-finished", startedAt)
-                if (activeSessionId != id) selectSession(id)
+                if (activeSessionId != id) selectSession(id, intent)
             }
             return
         }
@@ -989,7 +1023,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val nextMessages = sessionStore.state(id, loadFromDisk = false)
         ensureConversationPanel(id)
         messages = nextMessages
-        activeSessionId = id
+        selectActiveSession(id)
         dshPerfLog("switch.$traceId.active-state-swapped", startedAt)
         scroller.scrollToEnd()
         addTaskWhenPagerUpdateLayoutFinish {
@@ -999,7 +1033,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         }
         // Invalidate any in-flight request for the previous session before
         // starting the new one, so an old response cannot repaint this view.
-        historyRequestGeneration++
+        historyRequests.invalidate()
         sessionStore.loadFromDisk(id)
         fetchHostHistory(id)
         setTimeout(pagerId, 0) {
@@ -1017,6 +1051,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private fun applyActiveSessionChrome() {
         interactions.reset()
         goal.clearSnapshot()
+        hostClient?.store?.projections?.get(activeSessionId)?.get("goal")?.value?.let(goal::applyProjection)
         queue.refresh()
         jobs.refresh()
         interactions.refresh()
@@ -1049,9 +1084,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     }
 
     private fun completePendingSessionSelection(sessionId: String) {
-        if (!pendingSessionSelections.remove(sessionId)) return
+        val intent = pendingSessionSelections.remove(sessionId) ?: return
         setTimeout(pagerId, 0) {
-            if (activeSessionId != sessionId) selectSession(sessionId)
+            if (activeSessionId != sessionId) selectSession(sessionId, intent)
         }
     }
 
@@ -1110,14 +1145,17 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         }
         if (sessions.isEmpty()) {
             connectionLabel = "正在创建会话"
+            val request = captureRequest() ?: return
             hostRepository.createSession(null, { sessionId ->
+                if (!request.isCurrent()) return@createSession
                 sessions.add(DshSession(sessionId, "新会话", "Host", "", blank = true))
                 refreshVisibleSessions()
                 runCatching { localStore?.replaceSessions(activeConnectionId, sessions.toList()) }
-                activeSessionId = sessionId
+                selectActiveSession(sessionId)
                 models.load(sessionId)
                 sendDraft()
             }, { error ->
+                if (!request.isCurrent()) return@createSession
                 connectionLabel = "会话创建失败"
                 messages.add(DshMessage(
                     "send-session-error-${messages.size}",

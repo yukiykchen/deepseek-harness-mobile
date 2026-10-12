@@ -17,4 +17,6 @@ internal interface DshHomeContext : PagerScope {
 
     /** Session currently shown in the conversation column. */
     val activeSessionId: String
+
+    val selectionGeneration: Long
 }

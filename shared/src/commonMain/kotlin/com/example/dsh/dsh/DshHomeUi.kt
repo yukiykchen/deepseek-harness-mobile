@@ -29,20 +29,6 @@ internal fun ViewContainer<*, *>.DshHitButton(onClick: () -> Unit) {
     }
 }
 
-internal fun isConnectionReadyLabel(label: String): Boolean {
-    return label.startsWith("已连接") ||
-        label.endsWith("已连接") ||
-        label.endsWith("已就绪") ||
-        label == "连接成功"
-}
-
-internal fun isReconnectLabel(label: String): Boolean {
-    return label == "远程连接重建中" ||
-        label == "扫码连接重建中" ||
-        label == "扫码连接重试中" ||
-        label == "本地 DSH 连接重建中"
-}
-
 internal fun topBarConnectingText(label: String): String {
     val value = label.trim()
     if (value.isEmpty()) return "连接中"

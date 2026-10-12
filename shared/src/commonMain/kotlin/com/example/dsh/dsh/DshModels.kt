@@ -194,13 +194,15 @@ internal class DshHostStore {
         sessions[sessionId]?.let { sessions[sessionId] = it.copy(subscribedLastSeq = maxOf(it.subscribedLastSeq, lastSeq)) }
     }
 
-    fun applySessionEvent(sessionId: String, seq: Int, type: String, raw: String) {
+    /** Returns whether downstream projections may consume this event. */
+    fun applySessionEvent(sessionId: String, seq: Int, type: String, raw: String): Boolean {
+        if (seq < 0) return true // Unsequenced payloads have no safe deduplication identity.
         val events = sessionEvents.getOrPut(sessionId) { mutableListOf() }
-        if (events.none { it.seq == seq }) {
-            events += DshRawSessionEvent(seq, type, raw)
-            events.sortBy { it.seq }
-        }
+        if (events.any { it.seq == seq }) return false
+        events += DshRawSessionEvent(seq, type, raw)
+        events.sortBy { it.seq }
         sessionLastSeq[sessionId] = maxOf(sessionLastSeq[sessionId] ?: -1, seq)
+        return true
     }
 
     /** Queue/jobs are whole snapshots; later frames replace the whole value. */
@@ -208,16 +210,18 @@ internal class DshHostStore {
     fun replaceJobs(sessionId: String, rawJobs: String) { jobSnapshots[sessionId] = rawJobs }
 
     /** Projection updates use higher-seq-wins, including across reconnect baselines. */
-    fun applyProjection(sessionId: String, key: String, value: String, seq: Int) {
+    fun applyProjection(sessionId: String, key: String, value: String, seq: Int): Boolean {
         val cells = projections.getOrPut(sessionId) { mutableMapOf() }
         val previous = cells[key]
-        if (previous == null || seq >= previous.seq) {
+        if (previous != null && seq <= previous.seq) return false
+        run {
             cells[key] = DshProjectionCell(value, seq)
             if (key == "title") {
                 val title = value.trim().removeSurrounding("\"")
                 sessions[sessionId]?.let { sessions[sessionId] = it.copy(title = title) }
             }
         }
+        return true
     }
 
     fun putPending(rpcId: String, raw: String) { pendingInteractions[rpcId] = raw }

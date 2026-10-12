@@ -34,6 +34,7 @@ internal class DshInteractionController(
 
     /** Drop everything that belonged to the previous session. */
     fun reset() {
+        busy = false
         pendingApproval = null
         pendingQuestion = null
         selectedOptions.clear()
@@ -58,6 +59,8 @@ internal class DshInteractionController(
     fun answerApproval(outcome: String) {
         val client = ctx.hostClient ?: return
         val approval = pendingApproval ?: return
+        if (busy) return
+        val request = ctx.captureRequest(approval.sessionId) ?: return
         busy = true
         client.respondApproval(
             rpcId = approval.rpcId,
@@ -66,6 +69,7 @@ internal class DshInteractionController(
             outcome = outcome,
         ) { accepted, reason ->
             setTimeout(pagerId, 0) {
+                if (!request.isCurrent() || pendingApproval?.rpcId != approval.rpcId) return@setTimeout
                 busy = false
                 if (!accepted) {
                     onApprovalRejected(failureLabel(reason))
@@ -148,6 +152,8 @@ internal class DshInteractionController(
             DshStreamLog.question("submit.abort empty-rpcId session=${question.sessionId}")
             return
         }
+        if (busy) return
+        val request = ctx.captureRequest(question.sessionId) ?: return
         error = ""
         busy = true
         val answer = buildQuestionAnswer(question, drafts)
@@ -160,6 +166,8 @@ internal class DshInteractionController(
             answer = answer,
         ) { accepted, reason ->
             setTimeout(pagerId, 0) {
+                if (accepted) client.clearPending(question.rpcId)
+                if (!request.isCurrent() || pendingQuestion?.rpcId != question.rpcId) return@setTimeout
                 val stillPending = client.pendingInteractions(question.sessionId).second
                 DshStreamLog.question(
                     "submit.callback accepted=$accepted reason='$reason' rpcId=${question.rpcId} stillPending=${stillPending?.rpcId.orEmpty()} active=${ctx.activeSessionId}",

@@ -15,17 +15,29 @@ internal class DshModelPickerController(private val ctx: DshHomeContext) : Pager
         private set
     val options by observableList<DshModelOption>()
 
+    private val requests = DshRequestVersion()
+
+    fun reset() {
+        requests.invalidate()
+        busy = false
+        visible = false
+        error = ""
+        selectedLabel = "选择模型"
+        options.clear()
+    }
+
     fun load(sessionId: String) {
-        val client = ctx.hostClient ?: return
-        client.loadModels(sessionId, { loaded ->
-            if (ctx.activeSessionId != sessionId) return@loadModels
+        val request = ctx.captureRequest(sessionId) ?: return
+        val version = requests.next()
+        request.client.loadModels(sessionId, { loaded ->
+            if (!request.isCurrent() || !requests.accepts(version)) return@loadModels
             selectedLabel = loaded.current.name
             options.clear()
             options.addAll(loaded.options)
             busy = false
             error = if (loaded.routable) "" else "当前模型不可用，请选择其他模型。"
         }, { message ->
-            if (ctx.activeSessionId != sessionId) return@loadModels
+            if (!request.isCurrent() || !requests.accepts(version)) return@loadModels
             busy = false
             error = message
         })
@@ -39,10 +51,13 @@ internal class DshModelPickerController(private val ctx: DshHomeContext) : Pager
     }
 
     fun select(option: DshModelOption) {
-        val client = ctx.hostClient ?: return
+        if (busy) return
+        val request = ctx.captureRequest() ?: return
+        val version = requests.next()
         busy = true
         error = ""
-        client.selectModel(ctx.activeSessionId, option, { selected ->
+        request.client.selectModel(request.sessionId, option, { selected ->
+            if (!request.isCurrent() || !requests.accepts(version)) return@selectModel
             selectedLabel = selected.name
             busy = false
             visible = false
@@ -52,6 +67,7 @@ internal class DshModelPickerController(private val ctx: DshHomeContext) : Pager
                 it.copy(selected = it.provider == selected.provider && it.model == selected.model)
             })
         }, { message ->
+            if (!request.isCurrent() || !requests.accepts(version)) return@selectModel
             busy = false
             error = message
         })
