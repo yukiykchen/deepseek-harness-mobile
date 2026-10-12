@@ -1,17 +1,14 @@
 package com.example.dsh.dsh
 
-import com.tencent.kuikly.core.manager.PagerManager
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.timer.setTimeout
 
-private const val STREAM_FLUSH_INTERVAL_MS = 16
 
 /**
  * The assistant turn that is currently being painted in the active session.
  *
  * A live turn is an ordered sequence of rows: an optional reasoning row, then
  * text segments split by tool cards (`root`, `root-segment-1`, ...). Text
- * deltas are buffered and flushed at most every [STREAM_FLUSH_INTERVAL_MS];
+ * deltas are buffered and flushed at most every 16 ms;
  * while a segment is live its row keeps `content = ""` and DshMarkdown reads
  * [liveContent] instead, so LazyLoop never has to rebuild the cell per token.
  *
@@ -21,9 +18,11 @@ private const val STREAM_FLUSH_INTERVAL_MS = 16
 internal class DshStreamingTurnController(
     private val ctx: DshHomeContext,
     private val sessionStore: DshSessionMessageStore,
-    private val scroller: DshConversationScroller,
+    scroller: DshConversationScroller,
     private val listener: Listener,
 ) : DshHomeContext by ctx {
+    private val render = DshStreamingRenderAdapter(ctx, scroller)
+
     private fun messages(): List<DshMessage> = sessionStore.state(activeSessionId, loadFromDisk = false).toList()
 
     interface Listener {
@@ -131,11 +130,7 @@ internal class DshStreamingTurnController(
     }
 
     /** Engine stopped or disconnected. */
-    fun detach() {
-        observerRevision++
-        handle?.detach()
-        handle = null
-    }
+    fun detach() = cancelForSessionSwitch()
 
     /** Close the current text row immediately before the next tool card. */
     fun splitBeforeTool() {
@@ -152,7 +147,7 @@ internal class DshStreamingTurnController(
                     sessionStore.remove(activeSessionId, id)
                 } else {
                     sessionStore.update(activeSessionId, current.copy(content = text, streaming = false))
-                    scroller.realizeVisible()
+                    render.realizeVisible()
                 }
             }
         }
@@ -280,6 +275,8 @@ internal class DshStreamingTurnController(
         rootId = live.id
         segment = 0
         liveContent = live.content
+        pendingDelta.setLength(0)
+        flushScheduled = false
         return true
     }
 
@@ -291,7 +288,8 @@ internal class DshStreamingTurnController(
         val firstPaint = liveContent.isEmpty()
         if (flushScheduled && !firstPaint) return
         flushScheduled = true
-        setTimeout(pagerId, if (firstPaint) 0 else STREAM_FLUSH_INTERVAL_MS) {
+        val revision = observerRevision
+        render.scheduleFlush(firstPaint, { revision == observerRevision }) {
             flushScheduled = false
             flush()
         }
@@ -307,8 +305,8 @@ internal class DshStreamingTurnController(
         } else {
             sessionStore.append(activeSessionId, DshMessage(id, DshMessageRole.ASSISTANT, reasoningContent, streaming = true, isReasoning = true))
         }
-        scroller.realizeVisible()
-        scroller.scrollToEnd()
+        render.realizeVisible()
+        render.followTail()
     }
 
     private fun flush() {
@@ -320,9 +318,9 @@ internal class DshStreamingTurnController(
         // copy()` is remove+add; LazyLoop treats an append at currentEnd as
         // "behind the visible range" and will not build the cell until scroll.
         insertLiveRow()
-        scroller.ensureLiveCell()
-        scroller.refresh(activeSessionId)
-        scroller.scrollToEnd()
+        render.ensureLiveCell()
+        render.refresh(activeSessionId)
+        render.followTail()
     }
 
     /**
@@ -350,7 +348,7 @@ internal class DshStreamingTurnController(
         // Keep content empty until settle. The first-flush snapshot must not
         // become the display source; DshMarkdown reads the live buffer.
         sessionStore.append(activeSessionId, DshMessage(id, DshMessageRole.ASSISTANT, "", streaming = true))
-        scroller.ensureLiveCell()
+        render.ensureLiveCell()
     }
 
     private fun updateLiveRow(content: String, streaming: Boolean) {
@@ -358,7 +356,7 @@ internal class DshStreamingTurnController(
         val index = rows.indexOfFirst { it.id == liveId }
         if (index < 0) return
         sessionStore.update(activeSessionId, rows[index].copy(content = content, streaming = streaming, isReasoning = false))
-        if (index >= rows.size - 1) scroller.realizeVisible()
+        if (index >= rows.size - 1) render.realizeVisible()
     }
 
     private fun finalizeReasoning() {
@@ -377,6 +375,7 @@ internal class DshStreamingTurnController(
         }
         val rows = messages()
         val sessionId = activeSessionId
+        val revision = observerRevision
         val finalContent = content.ifEmpty { liveContent }
         finalizeReasoning()
         val index = rows.indexOfFirst { it.id == id }
@@ -385,7 +384,7 @@ internal class DshStreamingTurnController(
         } else {
             sessionStore.append(activeSessionId, DshMessage(id, role, finalContent, streaming = false))
         }
-        scroller.realizeVisible()
+        render.realizeVisible()
         DshStreamLog.i(
             "ui.settle id=$id role=$role index=$index chars=${finalContent.length} preview='${DshStreamLog.preview(finalContent)}'",
         )
@@ -396,28 +395,16 @@ internal class DshStreamingTurnController(
         streaming = false
         liveContent = finalContent
         listener.onActivityChanged()
-        // Hand the row over from the live buffer to its stored content only
-        // after the settled text has been laid out, so the bubble never blinks.
-        afterLayout {
-            if (activeSessionId != sessionId) return@afterLayout
+        // Protocol ownership ends now. The renderer may keep the final text until layout.
+        rootId = ""
+        segment = 0
+        anchorAssistantId = ""
+        render.settle(sessionId, { revision == observerRevision && activeSessionId == sessionId }) {
             if (!streaming && liveId == id) {
                 val stored = messages().firstOrNull { it.id == id }?.content.orEmpty()
                 if (stored.length >= finalContent.length) {
                     liveId = ""
-                    rootId = ""
-                    segment = 0
-                    anchorAssistantId = ""
                     if (liveContent == finalContent) liveContent = ""
-                }
-            }
-            scroller.refresh(sessionId)
-            dshSessionRenderLog("stream.render.layout session=$sessionId messages=${messages().size}")
-            setTimeout(pagerId, 16) {
-                if (activeSessionId != sessionId) return@setTimeout
-                afterLayout {
-                    if (activeSessionId != sessionId) return@afterLayout
-                    scroller.refresh(sessionId)
-                    dshSessionRenderLog("stream.render.refresh session=$sessionId messages=${messages().size}")
                 }
             }
         }
@@ -437,7 +424,4 @@ internal class DshStreamingTurnController(
         listener.onActivityChanged()
     }
 
-    private fun afterLayout(task: () -> Unit) {
-        PagerManager.getPager(pagerId).addTaskWhenPagerUpdateLayoutFinish(task)
-    }
 }

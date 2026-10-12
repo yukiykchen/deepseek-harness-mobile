@@ -279,6 +279,7 @@ internal class DshHostClient(
         onSuccess: (List<DshWebTimelineItem>) -> Unit,
         onError: (String) -> Unit = {},
     ) {
+        val requestStartSeq = store.sessionLastSeq[sessionId] ?: -1
         call(DshHostProtocol.SESSION_HISTORY, JSONObject().apply {
             put("sessionId", sessionId)
             put("maxMessages", HISTORY_PAGE_MESSAGES)
@@ -288,7 +289,12 @@ internal class DshHostClient(
                 onError(error?.message ?: "session.history 返回为空")
                 return@call
             }
-            onSuccess(DshWebTimelineParser.parseWebTimeline(value.optJSONArray("events") ?: JSONArray()))
+            val events = dshReconcileHistory(
+                value.optJSONArray("events") ?: JSONArray(),
+                store.sessionEvents[sessionId].orEmpty(),
+                requestStartSeq,
+            )
+            onSuccess(DshWebTimelineParser.parseWebTimeline(events))
         }
     }
 

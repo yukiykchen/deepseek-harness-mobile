@@ -80,17 +80,31 @@ internal object DshWebTimelineParser {
                     val message = data.optJSONObject("message") ?: data
                     val key = "${data.optInt("turn")}:${data.optInt("step")}"
                     val blocks = message.optJSONArray("content") ?: JSONArray()
-                    appendAssistantBlocks(result, seq, blocks)
-                    partials.remove(key)
+                    val partialIds = setOf("partial-$key", "partial-reasoning-$key")
+                    val position = result.indexOfFirst { it.key in partialIds }
+                    result.removeAll { it.key in partialIds }
+                    val completed = mutableListOf<DshWebTimelineItem>()
+                    appendAssistantBlocks(completed, seq, blocks)
+                    if (position >= 0) result.addAll(position.coerceAtMost(result.size), completed)
+                    else result.addAll(completed)
+                    partialIds.forEach(partials::remove)
                 }
                 "assistant/chunk" -> {
                     val key = "${data.optInt("turn")}:${data.optInt("step")}"
                     val chunk = data.optJSONObject("chunk") ?: JSONObject()
                     val text = chunk.optString("text").ifEmpty { chunk.optString("delta") }
-                    if (text.isNotEmpty() &&
-                        chunk.optString("type") in setOf("", "text", "text-delta", "text_delta")
-                    ) {
-                        partials.getOrPut(key) { StringBuilder() }.append(text)
+                    val chunkType = chunk.optString("type")
+                    val reasoning = chunkType in setOf("reasoning-delta", "reasoning_delta")
+                    if (text.isNotEmpty() && (reasoning || chunkType in setOf("", "text", "text-delta", "text_delta"))) {
+                        val rowId = if (reasoning) "partial-reasoning-$key" else "partial-$key"
+                        val partial = partials.getOrPut(rowId) { StringBuilder() }.append(text)
+                        val row = DshWebTimelineItem(
+                            key = rowId,
+                            kind = if (reasoning) DshWebTimelineItem.Kind.REASONING else DshWebTimelineItem.Kind.ASSISTANT,
+                            text = partial.toString(),
+                        )
+                        val position = result.indexOfFirst { it.key == rowId }
+                        if (position >= 0) result[position] = row else result.add(row)
                     }
                 }
                 "tool/call" -> {
@@ -160,15 +174,6 @@ internal object DshWebTimelineParser {
                         ?.takeIf { it.isNotEmpty() }
                         ?.let { result += DshWebTimelineItem("turn-error-$seq", DshWebTimelineItem.Kind.ERROR, it) }
                 }
-            }
-        }
-        partials.forEach { (key, text) ->
-            if (text.isNotEmpty()) {
-                result += DshWebTimelineItem(
-                    key = "partial-$key",
-                    kind = DshWebTimelineItem.Kind.ASSISTANT,
-                    text = text.toString(),
-                )
             }
         }
         return result.filterNot { it.kind == DshWebTimelineItem.Kind.USER && it.isRuntimeContextSnapshot() }

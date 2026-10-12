@@ -213,7 +213,11 @@ internal class DshHostStore {
     fun applyProjection(sessionId: String, key: String, value: String, seq: Int): Boolean {
         val cells = projections.getOrPut(sessionId) { mutableMapOf() }
         val previous = cells[key]
-        if (previous != null && seq <= previous.seq) return false
+        if (previous != null) {
+            if (seq >= 0 && previous.seq >= 0 && seq <= previous.seq) return false
+            if (seq < 0 && previous.seq >= 0) return false
+            if (seq == previous.seq && value == previous.value) return false
+        }
         run {
             cells[key] = DshProjectionCell(value, seq)
             if (key == "title") {
