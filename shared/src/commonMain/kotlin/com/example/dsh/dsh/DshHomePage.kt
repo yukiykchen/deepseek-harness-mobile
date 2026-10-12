@@ -854,6 +854,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         sessionId: String,
         scrollToEndAfterLoad: Boolean = true,
         forceReplace: Boolean = false,
+        onFailure: (String) -> Unit = {},
         afterApply: () -> Unit = {},
     ) {
         val request = captureRequest(sessionId) ?: return
@@ -874,14 +875,29 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             if (!request.isCurrent() || !historyRequests.accepts(version)) return@loadWebTimeline
             DshStreamLog.i("ui.history-fail session=$sessionId error='${DshStreamLog.preview(error)}'")
             if (forceReplace && !sessionRunning && (turn.streaming || turn.stopButtonVisible)) {
-                turn.finishFromHistory(sessionId)
+                turn.finishFromHistory(sessionId, snapshotApplied = false)
             }
-            afterApply()
+            onFailure(error)
         })
     }
 
-    private fun resyncStreamingWithHost(sessionId: String, reason: String) {
+    private fun resyncStreamingWithHost(sessionId: String, reason: String, attempt: Int = 0) {
         if (sessionId != activeSessionId) return
+        val request = captureRequest(sessionId) ?: return
+        fun retryHistory(error: String) {
+            if (attempt >= 2) {
+                connectionLabel = "历史同步失败，当前会话尚未补齐"
+                bridgeModule.toast("历史同步失败，当前会话尚未补齐")
+                DshStreamLog.i("ui.resync.exhausted session=$sessionId error=${DshStreamLog.preview(error)}")
+                return
+            }
+            val failedVersion = historyRequests.current()
+            setTimeout(pagerId, 500 * (attempt + 1)) {
+                if (request.isCurrent() && historyRequests.accepts(failedVersion)) {
+                    resyncStreamingWithHost(sessionId, reason, attempt + 1)
+                }
+            }
+        }
         DshStreamLog.i(
             "ui.resync.begin reason=$reason session=$sessionId running=$sessionRunning streaming=${turn.streaming} stop=${turn.stopButtonVisible}",
         )
@@ -894,12 +910,12 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             return
         }
         if (sessionRunning) {
-            loadWebTimeline(sessionId, scrollToEndAfterLoad = true, forceReplace = true) {
+            loadWebTimeline(sessionId, scrollToEndAfterLoad = true, forceReplace = true, onFailure = ::retryHistory) {
                 turn.resumeFromHistory(sessionId, reason)
             }
         } else {
             val forceReplace = turn.streaming || turn.stopButtonVisible
-            loadWebTimeline(sessionId, scrollToEndAfterLoad = true, forceReplace = forceReplace) {
+            loadWebTimeline(sessionId, scrollToEndAfterLoad = true, forceReplace = forceReplace, onFailure = ::retryHistory) {
                 turn.finishFromHistory(sessionId)
                 connectionLabel = "已连接"
                 DshStreamLog.i("ui.resync.settled reason=$reason session=$sessionId messages=${messages.size}")

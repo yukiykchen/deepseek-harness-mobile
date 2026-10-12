@@ -164,14 +164,22 @@ internal class DshStreamingTurnController(
     }
 
     /** Host finished the run while we were not attached; settle on the history tail if there is one. */
-    fun finishFromHistory(sessionId: String) {
+    fun finishFromHistory(sessionId: String, snapshotApplied: Boolean = true) {
         if (!(streaming || stopButtonVisible)) return
-        flush()
-        rebindReasoningFromHistory()
-        if (rebindToHistoryTail()) {
-            settle(DshMessageRole.ASSISTANT, liveContent)
+        if (snapshotApplied) {
+            pendingDelta.setLength(0)
+            flushScheduled = false
+            rebindReasoningFromHistory()
+            if (rebindToHistoryTail()) settle(DshMessageRole.ASSISTANT, liveContent)
+            else release()
         } else {
-            release()
+            flush()
+            // No authoritative snapshot arrived: retain the live buffer rather than rebinding an empty placeholder.
+            if (liveId.isNotEmpty()) settle(DshMessageRole.ASSISTANT, liveContent)
+            else {
+                finalizeReasoning()
+                release()
+            }
         }
         listener.persist(sessionId)
         hostClient?.detachLiveStreams(sessionId)

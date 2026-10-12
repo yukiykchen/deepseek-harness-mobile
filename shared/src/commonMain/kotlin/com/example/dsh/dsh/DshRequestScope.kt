@@ -4,6 +4,7 @@ package com.example.dsh.dsh
 internal class DshRequestVersion {
     private var value = 0L
     fun next(): Long = ++value
+    fun current(): Long = value
     fun invalidate() { value++ }
     fun accepts(version: Long): Boolean = version == value
 }
