@@ -46,6 +46,9 @@ internal class DshConversationScroller(
 
     fun forget(sessionId: String) {
         scrollers.remove(sessionId)
+        val prefix = "$sessionId:"
+        rows.keys.filter { it.startsWith(prefix) }.forEach(rows::remove)
+        settleGeneration++
     }
 
     fun hasScroller(sessionId: String): Boolean = scrollers[sessionId]?.view != null

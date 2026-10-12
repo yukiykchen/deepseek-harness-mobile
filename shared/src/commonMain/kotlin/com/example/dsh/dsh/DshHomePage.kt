@@ -68,7 +68,8 @@ internal class DshHomePage : BasePager(), DshHomeContext {
 
     private var sessions by observableList<DshSession>()
     private val visibleSessions by observableList<DshSession>()
-    private var messages by observableList<DshMessage>()
+    private val messages: ObservableList<DshMessage>
+        get() = sessionStore.state(activeSessionId, loadFromDisk = false)
     private var conversationPanelIds by observableList<String>()
     override var activeSessionId by observable("session-1")
         private set
@@ -122,6 +123,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         localStore = { localStore },
         connectionId = { activeConnectionId },
         isBlank = { isBlankSession(it) },
+        protectedSessions = { conversationPanelIds.toSet() + activeSessionId },
         listener = object : DshSessionMessageStore.Listener {
             override fun onDiskLoaded(sessionId: String, preload: Boolean, scrollToEndAfterLoad: Boolean) {
                 if (!preload || conversationPanelIds.size < CONVERSATION_PANEL_CACHE_LIMIT) {
@@ -137,7 +139,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private val scroller: DshConversationScroller = DshConversationScroller(this, { messages }, { turn.liveId })
     private val turn: DshStreamingTurnController = DshStreamingTurnController(
         ctx = this,
-        messages = { messages },
+        sessionStore = sessionStore,
         scroller = scroller,
         listener = object : DshStreamingTurnController.Listener {
             override fun isConnectionActive() = connection.isActive()
@@ -145,15 +147,11 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 connectionLabel = label
             }
             override fun onActivityChanged() = turnStatus.sync()
-            override fun persist(sessionId: String) = sessionStore.persist(sessionId, messages)
+            override fun persist(sessionId: String) = sessionStore.persist(sessionId)
         },
     )
     private val disclosures = DshDisclosureStore(this) { scroller.refresh(activeSessionId) }
-    private val attachments = DshAttachmentCache(this) { sessionId ->
-        val next = sessionStore.state(sessionId).toList()
-        if (activeSessionId == sessionId) replaceMessagesIfChanged(next)
-        else sessionStore.put(sessionId, ObservableList<DshMessage>().also { it.addAll(next) })
-    }
+    private val attachments = DshAttachmentCache(this) { sessionId -> scroller.refresh(sessionId) }
     private val skills by observableList<DshSkill>()
     private var sessionRunning by observable(false)
 
@@ -195,7 +193,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         )
         restoreCachedSessions()
         if (sessions.isEmpty()) {
-            sessionStore.put(activeSessionId, messages)
+
             ensureConversationPanel(activeSessionId)
         }
         dshPerfLog("startup.restoreCachedSessions.done", startedAt)
@@ -546,7 +544,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             sessions.clear()
             sessions.addAll(loaded)
             refreshVisibleSessions()
-            runCatching { localStore?.replaceSessions(activeConnectionId, loaded) }
+            sessionStore.persistSessions(loaded)
             sessionStore.preload(sessions.map { it.id })
             connectionLabel = if (loaded.isEmpty()) "已连接 · 无会话" else "已连接 · 正在同步远程历史"
             if (loaded.isNotEmpty()) {
@@ -561,7 +559,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 }
                 workspaces.refreshGroups()
                 if (nextId == null) {
-                    messages = ObservableList()
+                    sessionStore.replace(activeSessionId, emptyList())
                     createSession()
                     return@loadSessions
                 }
@@ -575,7 +573,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 }
             } else {
                 preferBlankHomeOnNextLoad = false
-                messages = ObservableList()
+                sessionStore.replace(activeSessionId, emptyList())
                 createSession()
             }
         }, { error ->
@@ -583,8 +581,8 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             connectionLabel = "内核连接失败"
             restoreCachedSessions()
             if (sessions.isEmpty()) {
-                messages.clear()
-                messages.add(DshMessage("load-error", DshMessageRole.ERROR, error))
+                sessionStore.replace(activeSessionId, emptyList())
+                sessionStore.append(activeSessionId, DshMessage("load-error", DshMessageRole.ERROR, error))
             } else {
                 connectionLabel = "连接失败 · 已显示缓存"
             }
@@ -740,10 +738,10 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 sessions.add(0, created)
                 refreshVisibleSessions()
             }
-            runCatching { localStore?.replaceSessions(activeConnectionId, sessions.toList()) }
+            sessionStore.persistSessions(sessions.toList())
             selectActiveSession(sessionId)
-            messages = ObservableList()
-            sessionStore.put(sessionId, messages)
+            sessionStore.replace(activeSessionId, emptyList())
+
             sessionStore.markReady(sessionId)
             ensureConversationPanel(sessionId)
             dshPerfLog("newSession.$traceId.ui.ready", startedAt)
@@ -760,7 +758,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             if (!request.isCurrent()) return@createSession
             dshPerfLog("newSession.$traceId.host.create.error:$error", startedAt)
             connectionLabel = "新会话创建失败"
-            messages.add(DshMessage("session-create-error-${messages.size}", DshMessageRole.ERROR, error))
+            sessionStore.append(activeSessionId, DshMessage("session-create-error-${messages.size}", DshMessageRole.ERROR, error))
         })
     }
 
@@ -772,7 +770,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // Show the selected session immediately. The Host history request is
         // remote and can take a moment, so keeping the previous list here
         // makes a session switch look stuck.
-        messages = sessionStore.state(
+        sessionStore.state(
             sessionId,
             scrollToEndAfterLoad = scrollToEndAfterLoad,
         )
@@ -802,7 +800,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             sessionStore.markReady(sessionId)
             replaceMessagesIfChanged(projected, forceReplace)
             if (projected.isNotEmpty()) {
-                sessionStore.persist(sessionId, messages)
+                sessionStore.persist(sessionId)
             }
             projected.mapNotNull { it.attachmentId }.forEach { attachments.load(sessionId, it) }
             completePendingSessionSelection(sessionId)
@@ -865,7 +863,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         // it. Seal that block before appending its card so the list follows the
         // actual event order instead of grouping all cards at the turn end.
         turn.splitBeforeTool()
-        messages.add(model.toRemoteMessage(id))
+        sessionStore.append(activeSessionId, model.toRemoteMessage(id))
         scroller.refresh(activeSessionId)
         scroller.scrollToEnd()
     }
@@ -873,14 +871,14 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private fun showContextInjection(event: DshRawSessionEvent) {
         val message = dshContextInjectionMessage(event) ?: return
         if (messages.any { it.id == message.id }) return
-        messages.add(message)
+        sessionStore.append(activeSessionId, message)
         scroller.scrollToEnd()
     }
 
     private fun showAssistantBlocks(event: DshRawSessionEvent) {
         val rows = dshAssistantBlockMessages(event) ?: return
         for (row in rows) {
-            if (messages.none { it.id == row.id }) messages.add(row)
+            if (messages.none { it.id == row.id }) sessionStore.append(activeSessionId, row)
             row.attachmentId?.let { attachments.load(activeSessionId, it) }
         }
         scroller.scrollToEnd()
@@ -894,7 +892,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         if (index < 0) return
         val previous = messages[index].remoteTool ?: return
         val model = DshRemoteToolCallModels.settleLiveResult(previous, payload) ?: return
-        messages[index] = model.toRemoteMessage(messages[index].id)
+        sessionStore.update(activeSessionId, model.toRemoteMessage(messages[index].id))
     }
 
     private fun renameActiveSession() {
@@ -923,7 +921,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         client.forkSession(activeSessionId, lastSeq) { value, error ->
             if (error != null || value == null) {
                 setTimeout(pagerId, 0) {
-                    messages.add(DshMessage(
+                    sessionStore.append(activeSessionId, DshMessage(
                         "fork-error-${messages.size}",
                         DshMessageRole.ERROR,
                         error?.message ?: "session.fork failed",
@@ -960,16 +958,14 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val homeId = cached.firstOrNull { it.blank }?.id
         if (homeId != null) {
             selectActiveSession(homeId)
-            val state = sessionStore.state(homeId, loadFromDisk = false)
-            state.clear()
+            sessionStore.state(homeId, loadFromDisk = false)
+            sessionStore.replace(homeId, emptyList())
             sessionStore.markReady(homeId)
-            messages = state
             ensureConversationPanel(homeId)
             return
         }
-        val state = ObservableList<DshMessage>()
-        messages = state
-        sessionStore.put(activeSessionId, state)
+        sessionStore.replace(activeSessionId, emptyList())
+
         sessionStore.markReady(activeSessionId)
         ensureConversationPanel(activeSessionId)
     }
@@ -980,6 +976,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         historyRequests.invalidate()
         skillRequests.invalidate()
         turn.cancelForSessionSwitch()
+        sessionStore.persist(activeSessionId)
         activeSessionId = id
         models.reset()
         queue.reset()
@@ -1000,6 +997,8 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         }
         if (!sessionStore.isReady(id)) {
             pendingSessionSelections[id] = intent
+            sessionStore.state(id)
+            sessionStore.loadFromDisk(id)
             dshPerfLog("switch.$traceId.wait-data", startedAt)
             return
         }
@@ -1019,10 +1018,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         dshPerfLog("switch.$traceId.mounted.begin", startedAt)
         scroller.refresh(id)
         turn.cancelForSessionSwitch()
-        sessionStore.put(activeSessionId, messages)
-        val nextMessages = sessionStore.state(id, loadFromDisk = false)
+
+        sessionStore.state(id, loadFromDisk = false)
         ensureConversationPanel(id)
-        messages = nextMessages
         selectActiveSession(id)
         dshPerfLog("switch.$traceId.active-state-swapped", startedAt)
         scroller.scrollToEnd()
@@ -1078,7 +1076,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     }
 
     private fun loadCachedHistory(sessionId: String) {
-        messages = sessionStore.state(sessionId, loadFromDisk = false)
+        sessionStore.state(sessionId, loadFromDisk = false)
         ensureConversationPanel(sessionId)
         sessionStore.loadFromDisk(sessionId)
     }
@@ -1132,7 +1130,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val hostRepository = hostClient
         if (hostRepository == null) {
             connectionLabel = "本地内核尚未连接"
-            messages.add(DshMessage(
+            sessionStore.append(activeSessionId, DshMessage(
                 "send-engine-error-${messages.size}",
                 DshMessageRole.ERROR,
                 "本地 Harness 尚未连接，请稍候再试。",
@@ -1150,14 +1148,14 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 if (!request.isCurrent()) return@createSession
                 sessions.add(DshSession(sessionId, "新会话", "Host", "", blank = true))
                 refreshVisibleSessions()
-                runCatching { localStore?.replaceSessions(activeConnectionId, sessions.toList()) }
+                sessionStore.persistSessions(sessions.toList())
                 selectActiveSession(sessionId)
                 models.load(sessionId)
                 sendDraft()
             }, { error ->
                 if (!request.isCurrent()) return@createSession
                 connectionLabel = "会话创建失败"
-                messages.add(DshMessage(
+                sessionStore.append(activeSessionId, DshMessage(
                     "send-session-error-${messages.size}",
                     DshMessageRole.ERROR,
                     "无法创建会话：$error",
@@ -1168,13 +1166,11 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         val sessionId = activeSessionId
         val user = DshMessage("user-${messages.size}", DshMessageRole.USER, prompt)
         val assistantId = "assistant-${messages.size}"
-        val wasEmpty = messages.isEmpty()
-        messages.add(user)
+        sessionStore.append(activeSessionId, user)
         // DSH ChatView keeps the assistant node out of the flow until the
         // first token. The turn-status row ("Deep diving...") occupies that
         // gap so LazyLoop never has to realize an empty markdown bubble.
-        sessionStore.put(sessionId, messages)
-        if (wasEmpty) sessionStore.remount(sessionId)
+
         scroller.pinTail()
         scroller.scrollToMessage(user.id)
         draft = ""
@@ -1244,36 +1240,16 @@ internal class DshHomePage : BasePager(), DshHomeContext {
         }
         val current = messages.toList()
         if (current == filtered) return
-        if (dshMessagesVisuallyEqual(current, filtered)) {
-            DshStreamLog.i(
-                "ui.replace-messages skip-visual-equal from=${current.size} force=$force",
-            )
-            return
-        }
         val remount = current.isEmpty() && filtered.isNotEmpty()
         DshStreamLog.i(
             "ui.replace-messages from=${current.size} to=${filtered.size} streaming=${turn.streaming} force=$force remount=$remount preview='${DshStreamLog.preview(filtered.lastOrNull()?.content.orEmpty())}'",
         )
         applyMessagesInPlace(filtered)
-        sessionStore.put(activeSessionId, messages)
-        if (remount) sessionStore.remount(activeSessionId)
+
     }
 
     private fun applyMessagesInPlace(next: List<DshMessage>) {
-        val shared = minOf(messages.size, next.size)
-        for (index in 0 until shared) {
-            if (messages[index] != next[index]) messages[index] = next[index]
-        }
-        when {
-            next.size < messages.size -> {
-                for (index in messages.lastIndex downTo next.size) {
-                    messages.removeAt(index)
-                }
-            }
-            next.size > messages.size -> {
-                messages.addAll(next.subList(messages.size, next.size))
-            }
-        }
+        sessionStore.replace(activeSessionId, next)
     }
 
     companion object {

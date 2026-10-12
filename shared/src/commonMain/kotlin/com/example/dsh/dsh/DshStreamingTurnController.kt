@@ -1,7 +1,6 @@
 package com.example.dsh.dsh
 
 import com.tencent.kuikly.core.manager.PagerManager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.timer.setTimeout
 
@@ -21,11 +20,12 @@ private const val STREAM_FLUSH_INTERVAL_MS = 16
  */
 internal class DshStreamingTurnController(
     private val ctx: DshHomeContext,
-    /** Rows of the active session. */
-    private val messages: () -> ObservableList<DshMessage>,
+    private val sessionStore: DshSessionMessageStore,
     private val scroller: DshConversationScroller,
     private val listener: Listener,
 ) : DshHomeContext by ctx {
+    private fun messages(): List<DshMessage> = sessionStore.state(activeSessionId, loadFromDisk = false).toList()
+
     interface Listener {
         fun isConnectionActive(): Boolean
         fun onStatusLabel(label: String)
@@ -149,9 +149,9 @@ internal class DshStreamingTurnController(
                 val current = rows[index]
                 val text = current.content.ifEmpty { liveContent }
                 if (text.isEmpty()) {
-                    rows.removeAt(index)
+                    sessionStore.remove(activeSessionId, id)
                 } else {
-                    rows[index] = current.copy(content = text, streaming = false)
+                    sessionStore.update(activeSessionId, current.copy(content = text, streaming = false))
                     scroller.realizeVisible()
                 }
             }
@@ -188,7 +188,7 @@ internal class DshStreamingTurnController(
             listener.onStatusLabel("正在生成")
             val index = rows.indexOfFirst { it.id == liveId }
             if (index >= 0) {
-                rows[index] = rows[index].copy(streaming = true)
+                sessionStore.update(activeSessionId, rows[index].copy(streaming = true))
             }
         } else {
             if (rootId.isEmpty()) {
@@ -303,9 +303,9 @@ internal class DshStreamingTurnController(
         reasoningContent += delta
         val index = rows.indexOfFirst { it.id == id }
         if (index >= 0) {
-            rows[index] = rows[index].copy(content = reasoningContent, streaming = true, isReasoning = true)
+            sessionStore.update(activeSessionId, rows[index].copy(content = reasoningContent, streaming = true, isReasoning = true))
         } else {
-            rows.add(DshMessage(id, DshMessageRole.ASSISTANT, reasoningContent, streaming = true, isReasoning = true))
+            sessionStore.append(activeSessionId, DshMessage(id, DshMessageRole.ASSISTANT, reasoningContent, streaming = true, isReasoning = true))
         }
         scroller.realizeVisible()
         scroller.scrollToEnd()
@@ -349,7 +349,7 @@ internal class DshStreamingTurnController(
         if (id.isEmpty() || rows.any { it.id == id }) return
         // Keep content empty until settle. The first-flush snapshot must not
         // become the display source; DshMarkdown reads the live buffer.
-        rows.add(DshMessage(id, DshMessageRole.ASSISTANT, "", streaming = true))
+        sessionStore.append(activeSessionId, DshMessage(id, DshMessageRole.ASSISTANT, "", streaming = true))
         scroller.ensureLiveCell()
     }
 
@@ -357,7 +357,7 @@ internal class DshStreamingTurnController(
         val rows = messages()
         val index = rows.indexOfFirst { it.id == liveId }
         if (index < 0) return
-        rows[index] = rows[index].copy(content = content, streaming = streaming, isReasoning = false)
+        sessionStore.update(activeSessionId, rows[index].copy(content = content, streaming = streaming, isReasoning = false))
         if (index >= rows.size - 1) scroller.realizeVisible()
     }
 
@@ -365,7 +365,7 @@ internal class DshStreamingTurnController(
         if (reasoningId.isEmpty()) return
         val rows = messages()
         val index = rows.indexOfFirst { it.id == reasoningId }
-        if (index >= 0) rows[index] = rows[index].copy(streaming = false, isReasoning = true)
+        if (index >= 0) sessionStore.update(activeSessionId, rows[index].copy(streaming = false, isReasoning = true))
     }
 
     /** Write the final text into the live row and leave streaming mode. */
@@ -381,9 +381,9 @@ internal class DshStreamingTurnController(
         finalizeReasoning()
         val index = rows.indexOfFirst { it.id == id }
         if (index >= 0) {
-            rows[index] = rows[index].copy(role = role, content = finalContent, streaming = false)
+            sessionStore.update(activeSessionId, rows[index].copy(role = role, content = finalContent, streaming = false))
         } else {
-            rows.add(DshMessage(id, role, finalContent, streaming = false))
+            sessionStore.append(activeSessionId, DshMessage(id, role, finalContent, streaming = false))
         }
         scroller.realizeVisible()
         DshStreamLog.i(
