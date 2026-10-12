@@ -19,4 +19,6 @@ internal interface DshHomeContext : PagerScope {
     val activeSessionId: String
 
     val selectionGeneration: Long
+
+    val connectionScopeId: String
 }

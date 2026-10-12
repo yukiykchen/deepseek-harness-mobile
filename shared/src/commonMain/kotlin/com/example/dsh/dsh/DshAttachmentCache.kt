@@ -2,38 +2,56 @@ package com.example.dsh.dsh
 
 import com.tencent.kuikly.core.reactive.handler.observable
 
-/**
- * Downloaded image attachments as data URLs, shared by every session.
- *
- * Each attachment is fetched at most once at a time; a failed read can be
- * retried by the next [load]. [dataUrl] reads a reactive revision so image
- * rows re-render when a download lands.
- */
+/** Bounded attachment data scoped to the Host and session that owns it. */
 internal class DshAttachmentCache(
     private val ctx: DshHomeContext,
-    /** Called with the session the attachment was requested for, after it is cached. */
     private val onLoaded: (sessionId: String) -> Unit,
-) : DshHomeContext by ctx {
+) {
+    private data class Key(val scope: String, val sessionId: String, val attachmentId: String)
     private var revision by observable(0)
-    private val dataUrls = mutableMapOf<String, String>()
-    private val pending = mutableSetOf<String>()
+    private val dataUrls = linkedMapOf<Key, String>()
+    private val pending = mutableMapOf<Key, Long>()
+    private var requestSequence = 0L
 
-    fun dataUrl(attachmentId: String): String? {
+    fun dataUrl(sessionId: String, attachmentId: String): String? {
         revision
-        return dataUrls[attachmentId]
+        val key = Key(ctx.connectionScopeId, sessionId, attachmentId)
+        val cached = dataUrls.remove(key) ?: return null
+        dataUrls[key] = cached
+        return cached
     }
 
     fun load(sessionId: String, attachmentId: String) {
-        if (dataUrl(attachmentId) != null || !pending.add(attachmentId)) return
-        val client = hostClient ?: return
+        val client = ctx.hostClient ?: return
+        val key = Key(ctx.connectionScopeId, sessionId, attachmentId)
+        if (dataUrls.containsKey(key) || pending.containsKey(key)) return
+        val request = ++requestSequence
+        val generation = client.currentConnectionState().generation
+        pending[key] = request
         client.loadAttachment(sessionId, attachmentId) { dataUrl, error ->
-            if (error != null || dataUrl == null) {
-                pending.remove(attachmentId)
-                return@loadAttachment
+            if (pending[key] != request) return@loadAttachment
+            pending.remove(key)
+            if (ctx.hostClient !== client || ctx.connectionScopeId != key.scope ||
+                client.currentConnectionState().generation != generation) return@loadAttachment
+            if (error != null || dataUrl == null) return@loadAttachment
+            dataUrls[key] = dataUrl
+            // An oversized single image may stay visible; evict other images first.
+            while (dataUrls.size > MAX_IMAGES || (dataUrls.size > 1 && dataUrls.values.sumOf { it.length.toLong() } > MAX_DATA_URL_CHARS)) {
+                dataUrls.remove(dataUrls.keys.first())
             }
-            dataUrls[attachmentId] = dataUrl
-            revision += 1
+            revision++
             onLoaded(sessionId)
         }
+    }
+
+    fun clear() {
+        pending.clear()
+        dataUrls.clear()
+        revision++
+    }
+
+    private companion object {
+        const val MAX_IMAGES = 32
+        const val MAX_DATA_URL_CHARS = 12_000_000L
     }
 }

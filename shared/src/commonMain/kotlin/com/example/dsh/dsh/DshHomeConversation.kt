@@ -120,51 +120,11 @@ internal fun ViewContainer<*, *>.DshNewSessionHome() {
 }
 
 internal fun ViewContainer<*, *>.DshConversation(
-    conversationIds: () -> ObservableList<String>,
-    activeConversationId: () -> String,
-    messagesForSession: (String) -> ObservableList<DshMessage>,
-    streaming: () -> Boolean,
-    streamingMessageId: () -> String,
-    streamingContent: () -> String,
-    scrollerRef: (String, ViewRef<ListView<*, *>>) -> Unit,
-    messageRef: (String, String, ViewRef<com.tencent.kuikly.core.views.DivView>) -> Unit,
-    draft: () -> String,
-    skills: () -> ObservableList<DshSkill>,
-    onPickSkill: (String) -> Unit,
-    keyboardHeight: () -> Float,
-    stopButtonVisible: () -> Boolean,
-    keyboardAnimation: () -> Animation,
-    inputRef: (com.tencent.kuikly.core.base.ViewRef<TextAreaView>) -> Unit,
-    onInputFocusChange: (Boolean) -> Unit,
-    onDraftChange: (String) -> Unit,
-    onKeyboardHeightChange: (KeyboardParams) -> Unit,
-    onSend: () -> Unit,
-    onStop: () -> Unit,
-    onDismissKeyboard: () -> Unit,
-    onUserListScroll: (ScrollParams) -> Unit,
-    modelLabel: () -> String,
-    attachmentMenuVisible: () -> Boolean,
-    voiceActive: () -> Boolean,
-    onOpenModels: () -> Unit,
-    onToggleAttachments: () -> Unit,
-    onToggleVoice: () -> Unit,
-    isDisclosureExpanded: (String) -> Boolean,
-    onToggleDisclosure: (String) -> Unit,
-    isBodyDisclosureExpanded: (String) -> Boolean,
-    onToggleBodyDisclosure: (String) -> Unit,
-    isJsonNodeExpanded: (String, String) -> Boolean,
-    onToggleJsonNode: (String, String) -> Unit,
-    onCopyToolContent: (String) -> Unit,
-    attachmentDataUrl: (String) -> String?,
-    queue: DshQueueController,
-    jobs: DshJobsController,
-    goal: DshGoalController,
-    interactions: DshInteractionController,
-    sessionRunning: () -> Boolean,
-    isBlankConversation: () -> Boolean,
-    conversationListEpoch: (String) -> Int,
-    turnReconnecting: () -> Boolean,
-    turnElapsedMs: () -> Long,
+    timeline: DshTimelineUi,
+    composer: DshComposerUi,
+    disclosures: DshMessageActionsUi,
+    turn: DshTurnUi,
+    panels: DshSessionPanelsUi,
     availableWidth: Float,
 ) {
     View {
@@ -182,8 +142,8 @@ internal fun ViewContainer<*, *>.DshConversation(
                 // The header stays outside this container and the composer
                 // naturally settles above the keyboard without translating
                 // the list outside its clipping bounds.
-                marginBottom(keyboardHeight())
-                animation(keyboardAnimation(), keyboardHeight())
+                marginBottom(composer.keyboardHeight())
+                animation(composer.keyboardAnimation(), composer.keyboardHeight())
             }
             View {
                 attr {
@@ -191,22 +151,22 @@ internal fun ViewContainer<*, *>.DshConversation(
                 width(availableWidth)
                 backgroundColor(Color.WHITE)
             }
-            vfor({ conversationIds() }) { sessionId ->
+            vfor({ timeline.conversationIds() }) { sessionId ->
                 View {
                     attr {
                         absolutePositionAllZero()
                         width(availableWidth)
                         visibility(true)
-                        opacity(if (activeConversationId() == sessionId) 1f else 0f)
-                        touchEnable(activeConversationId() == sessionId)
-                        zIndex(if (activeConversationId() == sessionId) 1 else 0)
+                        opacity(if (timeline.activeConversationId() == sessionId) 1f else 0f)
+                        touchEnable(timeline.activeConversationId() == sessionId)
+                        zIndex(if (timeline.activeConversationId() == sessionId) 1 else 0)
                     }
                     // vfor 的直接子节点不能是 vif/vbind。空 List 先挂载后 addAll
                     // 时 LazyLoop 会把增量当成「加到可见范围后面」而不建 cell。
-                    vbind({ conversationListEpoch(sessionId) }) {
-                        vif({ messagesForSession(sessionId).isNotEmpty() }) {
+                    vbind({ timeline.conversationListEpoch(sessionId) }) {
+                        vif({ timeline.messagesForSession(sessionId).isNotEmpty() }) {
                             List {
-                                ref { scrollerRef(sessionId, it) }
+                                ref { timeline.scrollerRef(sessionId, it) }
                                 attr {
                                     absolutePositionAllZero()
                                     width(availableWidth)
@@ -215,53 +175,53 @@ internal fun ViewContainer<*, *>.DshConversation(
                                     preloadViewDistance(pagerData.pageViewHeight)
                                 }
                                 event {
-                                    click { onDismissKeyboard() }
+                                    click { timeline.onDismissKeyboard() }
                                     dragBegin { params ->
-                                        onDismissKeyboard()
-                                        onUserListScroll(params)
+                                        timeline.onDismissKeyboard()
+                                        timeline.onUserListScroll(params)
                                     }
-                                    scroll { onUserListScroll(it) }
-                                    scrollEnd { onUserListScroll(it) }
-                                    register("touchDown", { onDismissKeyboard() })
+                                    scroll { timeline.onUserListScroll(it) }
+                                    scrollEnd { timeline.onUserListScroll(it) }
+                                    register("touchDown", { timeline.onDismissKeyboard() })
                                 }
                                 vforLazy(
-                                    { messagesForSession(sessionId) },
+                                    { timeline.messagesForSession(sessionId) },
                                     maxLoadItem = CHAT_MAX_RENDERED_MESSAGES,
                                 ) { message, _, _ ->
                                     View {
-                                        ref { messageRef(sessionId, message.id, it) }
+                                        ref { timeline.messageRef(sessionId, message.id, it) }
                                         attr {
                                             width((availableWidth - 36f).coerceAtLeast(0f))
                                         }
                                         DshMessageRow(
                                             message,
                                             pageStreaming = {
-                                                streaming() &&
-                                                    activeConversationId() == sessionId &&
-                                                    streamingMessageId() == message.id
+                                                turn.streaming() &&
+                                                    timeline.activeConversationId() == sessionId &&
+                                                    turn.streamingMessageId() == message.id
                                             },
-                                            isExpanded = { isDisclosureExpanded(message.id) },
+                                            isExpanded = { disclosures.isDisclosureExpanded(message.id) },
                                             onToggle = {
-                                                onToggleDisclosure(message.id)
+                                                disclosures.onToggleDisclosure(message.id)
                                             },
-                                            isBodyExpanded = { isBodyDisclosureExpanded(message.id) },
+                                            isBodyExpanded = { disclosures.isBodyDisclosureExpanded(message.id) },
                                             onToggleBody = {
-                                                onToggleBodyDisclosure(message.id)
+                                                disclosures.onToggleBodyDisclosure(message.id)
                                             },
-                                            isJsonNodeExpanded = { isJsonNodeExpanded(message.id, it) },
-                                            onToggleJsonNode = { onToggleJsonNode(message.id, it) },
-                                            onCopyToolContent = { onCopyToolContent(it) },
-                                            attachmentDataUrl = { attachmentDataUrl(it) },
+                                            isJsonNodeExpanded = { disclosures.isJsonNodeExpanded(message.id, it) },
+                                            onToggleJsonNode = { disclosures.onToggleJsonNode(message.id, it) },
+                                            onCopyToolContent = { disclosures.onCopyToolContent(it) },
+                                            attachmentDataUrl = { disclosures.attachmentDataUrl(sessionId, it) },
                                             contentProvider = {
-                                                val stored = messagesForSession(sessionId)
+                                                val stored = timeline.messagesForSession(sessionId)
                                                     .firstOrNull { it.id == message.id }
                                                     ?.content
                                                     .orEmpty()
                                                 dshDisplayedAssistantContent(
                                                     stored = stored,
-                                                    live = streamingContent(),
-                                                    isLiveRow = streamingMessageId() == message.id &&
-                                                        activeConversationId() == sessionId,
+                                                    live = turn.streamingContent(),
+                                                    isLiveRow = turn.streamingMessageId() == message.id &&
+                                                        timeline.activeConversationId() == sessionId,
                                                 )
                                             },
                                         )
@@ -273,11 +233,11 @@ internal fun ViewContainer<*, *>.DshConversation(
                                     }
                                     DshTurnStatus(
                                         visible = {
-                                            activeConversationId() == sessionId &&
-                                                (streaming() || stopButtonVisible() || sessionRunning())
+                                            timeline.activeConversationId() == sessionId &&
+                                                (turn.streaming() || turn.stopButtonVisible() || turn.sessionRunning())
                                         },
-                                        reconnecting = turnReconnecting,
-                                        elapsedMs = turnElapsedMs,
+                                        reconnecting = turn.turnReconnecting,
+                                        elapsedMs = turn.turnElapsedMs,
                                     )
                                 }
                             }
@@ -286,23 +246,23 @@ internal fun ViewContainer<*, *>.DshConversation(
                 }
             }
             vif({
-                conversationListEpoch(activeConversationId())
-                isBlankConversation() &&
-                    messagesForSession(activeConversationId()).isEmpty() &&
-                    !streaming() &&
-                    !stopButtonVisible() &&
-                    !sessionRunning()
+                timeline.conversationListEpoch(timeline.activeConversationId())
+                timeline.isBlankConversation() &&
+                    timeline.messagesForSession(timeline.activeConversationId()).isEmpty() &&
+                    !turn.streaming() &&
+                    !turn.stopButtonVisible() &&
+                    !turn.sessionRunning()
             }) {
                 DshNewSessionHome()
             }
         }
         DshSessionDocks(
-            queueCtl = queue,
-            jobsCtl = jobs,
-            goalCtl = goal,
-            interactionCtl = interactions,
-            activeConversationId = activeConversationId,
-            sessionRunning = sessionRunning,
+            queueCtl = panels.queue,
+            jobsCtl = panels.jobs,
+            goalCtl = panels.goal,
+            interactionCtl = panels.interactions,
+            activeConversationId = timeline.activeConversationId,
+            sessionRunning = turn.sessionRunning,
         )
             View {
                 attr {
@@ -314,8 +274,8 @@ internal fun ViewContainer<*, *>.DshConversation(
                     border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E5EE)))
                 }
                 vif({
-                    draft().startsWith("/") &&
-                        visibleSkillList(skills(), draft().removePrefix("/")).isNotEmpty()
+                    composer.draft().startsWith("/") &&
+                        visibleSkillList(composer.skills(), composer.draft().removePrefix("/")).isNotEmpty()
                 }) {
                     View {
                         attr {
@@ -326,7 +286,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                             borderRadius(8f)
                             border(Border(1f, BorderStyle.SOLID, Color(0xFFE1E7ED)))
                         }
-                        vfor({ visibleSkillList(skills(), draft().removePrefix("/")) }) { skill ->
+                        vfor({ visibleSkillList(composer.skills(), composer.draft().removePrefix("/")) }) { skill ->
                             View {
                                 attr {
                                     height(32f)
@@ -335,7 +295,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                                     paddingLeft(8f)
                                     paddingRight(8f)
                                 }
-                                event { click { onPickSkill(skill.name) } }
+                                event { click { composer.onPickSkill(skill.name) } }
                                 Text {
                                     attr {
                                         text("/${skill.name}")
@@ -359,7 +319,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                     }
                 }
             TextArea {
-                ref { inputRef(it) }
+                ref { composer.inputRef(it) }
                 attr {
                     minHeight(58f)
                     maxHeight(120f)
@@ -368,27 +328,27 @@ internal fun ViewContainer<*, *>.DshConversation(
                     color(Color(0xFF28323C))
                     placeholder(
                         when {
-                            voiceActive() -> "正在聆听..."
-                            isBlankConversation() &&
-                                messagesForSession(activeConversationId()).isEmpty() -> "描述你想要构建的内容"
+                            composer.voiceActive() -> "正在聆听..."
+                            timeline.isBlankConversation() &&
+                                timeline.messagesForSession(timeline.activeConversationId()).isEmpty() -> "描述你想要构建的内容"
                             else -> "请输入您的问题..."
                         },
                     )
                     placeholderColor(Color(0xFF91A0AA))
-                    editable(!voiceActive())
+                    editable(!composer.voiceActive())
                 }
                 event {
-                    inputFocus { onInputFocusChange(true) }
-                    textDidChange { onDraftChange(it.text) }
-                    keyboardHeightChange { onKeyboardHeightChange(it) }
+                    inputFocus { composer.onInputFocusChange(true) }
+                    textDidChange { composer.onDraftChange(it.text) }
+                    keyboardHeightChange { composer.onKeyboardHeightChange(it) }
                     inputBlur {
-                        onInputFocusChange(false)
-                        onKeyboardHeightChange(KeyboardParams(0f, 0.24f))
+                        composer.onInputFocusChange(false)
+                        composer.onKeyboardHeightChange(KeyboardParams(0f, 0.24f))
                     }
                 }
             }
 
-            vif({ attachmentMenuVisible() }) {
+            vif({ composer.attachmentMenuVisible() }) {
                 View {
                     attr {
                         height(82f)
@@ -442,7 +402,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                     }
                     Text {
                         attr {
-                            text(modelLabel())
+                            text(composer.modelLabel())
                             flex(1f)
                             lines(1)
                             fontSize(14f)
@@ -455,7 +415,7 @@ internal fun ViewContainer<*, *>.DshConversation(
                             size(18f, 18f)
                         }
                     }
-                    DshHitButton(onOpenModels)
+                    DshHitButton(composer.onOpenModels)
                 }
                 View { attr { flex(1f) } }
                 View {
@@ -470,13 +430,13 @@ internal fun ViewContainer<*, *>.DshConversation(
                         allCenter()
                         backgroundColor(Color(
                             when {
-                                stopButtonVisible() -> 0xFFE05252
-                                voiceActive() -> 0xFF679EFE
+                                turn.stopButtonVisible() -> 0xFFE05252
+                                composer.voiceActive() -> 0xFF679EFE
                                 else -> 0xFF4176E6
                             },
                         ))
                     }
-                    vif({ stopButtonVisible() }) {
+                    vif({ turn.stopButtonVisible() }) {
                         Image {
                             attr {
                                 src(ImageUri.commonAssets("square.svg"))
@@ -487,16 +447,16 @@ internal fun ViewContainer<*, *>.DshConversation(
                     velse {
                         Image {
                             attr {
-                                src(ImageUri.commonAssets(if (draft().isEmpty()) "mic.svg" else "send.svg"))
+                                src(ImageUri.commonAssets(if (composer.draft().isEmpty()) "mic.svg" else "send.svg"))
                                 size(23f, 23f)
                             }
                         }
                     }
                     DshHitButton {
                             when {
-                                stopButtonVisible() -> onStop()
-                                draft().isNotEmpty() -> onSend()
-                                else -> onToggleVoice()
+                                turn.stopButtonVisible() -> composer.onStop()
+                                composer.draft().isNotEmpty() -> composer.onSend()
+                                else -> composer.onToggleVoice()
                             }
                     }
                 }
@@ -511,84 +471,84 @@ internal fun ViewContainer<*, *>.DshConversation(
  * background jobs, goal, and whatever approval / question the Agent waits on.
  */
 private fun ViewContainer<*, *>.DshSessionDocks(
-    queueCtl: DshQueueController,
-    jobsCtl: DshJobsController,
-    goalCtl: DshGoalController,
-    interactionCtl: DshInteractionController,
+    queueCtl: DshQueueUi,
+    jobsCtl: DshJobsUi,
+    goalCtl: DshGoalUi,
+    interactionCtl: DshInteractionUi,
     activeConversationId: () -> String,
     sessionRunning: () -> Boolean,
 ) {
-    vif({ queueCtl.items.isNotEmpty() }) {
+    vif({ queueCtl.items().isNotEmpty() }) {
         DshQueueDock {
             attr {
-                items = queueCtl.items
-                expanded = queueCtl.expanded
-                editingId = queueCtl.editingId
-                actionBusy = queueCtl.actionBusy
-                editingText = queueCtl.editingText
+                items = queueCtl.items()
+                expanded = queueCtl.expanded()
+                editingId = queueCtl.editingId()
+                actionBusy = queueCtl.actionBusy()
+                editingText = queueCtl.editingText()
                 running = sessionRunning()
-                onToggle = queueCtl::toggle
-                onEdit = queueCtl::edit
-                onEditingTextChange = queueCtl::updateEditingText
-                onSaveEdit = queueCtl::save
-                onCancelEdit = queueCtl::cancelEdit
-                onRemove = queueCtl::remove
-                onSteer = queueCtl::steer
+                onToggle = queueCtl.toggle
+                onEdit = queueCtl.edit
+                onEditingTextChange = queueCtl.updateEditingText
+                onSaveEdit = queueCtl.save
+                onCancelEdit = queueCtl.cancelEdit
+                onRemove = queueCtl.remove
+                onSteer = queueCtl.steer
             }
         }
     }
-    vif({ jobsCtl.items.isNotEmpty() }) {
+    vif({ jobsCtl.items().isNotEmpty() }) {
         DshJobsPanel {
             attr {
-                jobs = jobsCtl.items
-                expanded = jobsCtl.expanded
-                now = jobsCtl.now
-                onToggle = jobsCtl::toggle
+                jobs = jobsCtl.items()
+                expanded = jobsCtl.expanded()
+                now = jobsCtl.now()
+                onToggle = jobsCtl.toggle
             }
         }
     }
-    vif({ goalCtl.snapshot != null }) {
+    vif({ goalCtl.snapshot() != null }) {
         DshGoalBar {
             attr {
-                snapshot = goalCtl.snapshot
-                busy = goalCtl.busy
-                error = goalCtl.error
-                onPause = goalCtl::pause
-                onResume = goalCtl::resume
-                onEdit = goalCtl::edit
-                onClear = goalCtl::clear
+                snapshot = goalCtl.snapshot()
+                busy = goalCtl.busy()
+                error = goalCtl.error()
+                onPause = goalCtl.pause
+                onResume = goalCtl.resume
+                onEdit = goalCtl.edit
+                onClear = goalCtl.clear
             }
         }
     }
-    vif({ interactionCtl.pendingApproval?.sessionId == activeConversationId() }) {
+    vif({ interactionCtl.pendingApproval()?.sessionId == activeConversationId() }) {
         DshApprovalPanel {
             attr {
-                approval = interactionCtl.pendingApproval
-                busy = interactionCtl.busy
-                onAnswer = interactionCtl::answerApproval
+                approval = interactionCtl.pendingApproval()
+                busy = interactionCtl.busy()
+                onAnswer = interactionCtl.answerApproval
             }
         }
     }
     vif({
-        interactionCtl.pendingApproval == null &&
-            interactionCtl.pendingQuestion?.sessionId == activeConversationId()
+        interactionCtl.pendingApproval() == null &&
+            interactionCtl.pendingQuestion()?.sessionId == activeConversationId()
     }) {
         DshQuestionFlow {
             attr {
-                question = interactionCtl.pendingQuestion
+                question = interactionCtl.pendingQuestion()
                 val options = ObservableList<DshPendingQuestionOption>()
-                interactionCtl.pendingQuestion?.questions?.getOrNull(interactionCtl.index)?.options?.let(options::addAll)
+                interactionCtl.pendingQuestion()?.questions?.getOrNull(interactionCtl.index())?.options?.let(options::addAll)
                 this.options = options
-                selected = interactionCtl.selectedOptions
-                custom = interactionCtl.custom
-                index = interactionCtl.index
-                error = interactionCtl.error
-                busy = interactionCtl.busy
-                onToggleOption = interactionCtl::toggleOption
-                onCustomChange = interactionCtl::updateCustom
-                onNavigate = interactionCtl::navigate
-                onSkip = interactionCtl::skip
-                onSubmit = interactionCtl::submit
+                selected = interactionCtl.selectedOptions()
+                custom = interactionCtl.custom()
+                index = interactionCtl.index()
+                error = interactionCtl.error()
+                busy = interactionCtl.busy()
+                onToggleOption = interactionCtl.toggleOption
+                onCustomChange = interactionCtl.updateCustom
+                onNavigate = interactionCtl.navigate
+                onSkip = interactionCtl.skip
+                onSubmit = interactionCtl.submit
             }
         }
     }

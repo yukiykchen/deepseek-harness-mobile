@@ -63,8 +63,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
             connection.statusLabel = value
         }
     private var settingsPageVisible by observable(false)
-    private val activeConnectionId: String
+    override val connectionScopeId: String
         get() = connection.sessionScope.storageKey
+    private val activeConnectionId: String get() = connectionScopeId
 
     private var sessions by observableList<DshSession>()
     private val visibleSessions by observableList<DshSession>()
@@ -211,6 +212,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     override fun pageWillDestroy() {
         stopCurrentEngine()
         sessionStore.close()
+        attachments.clear()
         super.pageWillDestroy()
     }
 
@@ -421,61 +423,107 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     private fun homeConversation(container: ViewContainer<*, *>, availableWidth: Float) {
         val ctx = this
         container.DshConversation(
-            conversationIds = { ctx.conversationPanelIds },
-            activeConversationId = { ctx.activeSessionId },
-            messagesForSession = { ctx.sessionStore.state(it) },
-            streaming = { ctx.turn.streaming },
-            streamingMessageId = { ctx.turn.liveId },
-            streamingContent = { ctx.turn.liveContent },
-            scrollerRef = { id, ref -> ctx.scroller.bindScroller(id, ref) },
-            messageRef = { sessionId, messageId, ref -> ctx.scroller.bindRow(sessionId, messageId, ref) },
-            draft = { ctx.draft },
-            skills = { ctx.skills },
-            onPickSkill = { ctx.draft = "/$it " },
-            keyboardHeight = { ctx.keyboardHeight },
-            stopButtonVisible = { ctx.turn.stopButtonVisible },
-            inputRef = { ctx.inputView = it.view },
-            onInputFocusChange = { ctx.inputFocused = it },
-            onDraftChange = { ctx.draft = it },
-            keyboardAnimation = { ctx.keyboardAnimation },
-            onKeyboardHeightChange = { ctx.updateKeyboard(it) },
-            onSend = { ctx.sendDraft() },
-            onStop = { ctx.stopStream() },
-            onDismissKeyboard = { ctx.dismissKeyboard() },
-            onUserListScroll = { ctx.scroller.onUserScroll(it) },
-            modelLabel = { ctx.models.selectedLabel },
-            attachmentMenuVisible = { ctx.attachmentMenuVisible },
-            voiceActive = { ctx.voiceActive },
-            onOpenModels = { ctx.openModelPicker() },
-            onToggleAttachments = {
-                ctx.dismissKeyboard()
-                ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
-            },
-            onToggleVoice = { ctx.toggleVoice() },
-            isDisclosureExpanded = { ctx.disclosures.isExpanded(it) },
-            onToggleDisclosure = { ctx.disclosures.toggle(it) },
-            isBodyDisclosureExpanded = { ctx.disclosures.isBodyExpanded(it) },
-            onToggleBodyDisclosure = { ctx.disclosures.toggleBody(it) },
-            isJsonNodeExpanded = { messageId, nodeId ->
-                ctx.disclosures.isJsonNodeExpanded(messageId, nodeId)
-            },
-            onToggleJsonNode = { messageId, nodeId ->
-                ctx.disclosures.toggleJsonNode(messageId, nodeId)
-            },
-            onCopyToolContent = {
-                ctx.bridgeModule.copyToPasteboard(it)
-                ctx.bridgeModule.toast("已复制")
-            },
-            attachmentDataUrl = { ctx.attachments.dataUrl(it) },
-            queue = ctx.queue,
-            jobs = ctx.jobs,
-            goal = ctx.goal,
-            interactions = ctx.interactions,
-            sessionRunning = { ctx.sessionRunning },
-            isBlankConversation = { ctx.isBlankSession() },
-            conversationListEpoch = { ctx.sessionStore.epochFor(it) },
-            turnReconnecting = { ctx.connection.reconnecting },
-            turnElapsedMs = { ctx.turnStatus.elapsedMs },
+            timeline = DshTimelineUi(
+                conversationIds = { ctx.conversationPanelIds },
+                activeConversationId = { ctx.activeSessionId },
+                messagesForSession = { ctx.sessionStore.state(it) },
+                scrollerRef = { id, ref -> ctx.scroller.bindScroller(id, ref) },
+                messageRef = { sessionId, messageId, ref -> ctx.scroller.bindRow(sessionId, messageId, ref) },
+                onDismissKeyboard = { ctx.dismissKeyboard() },
+                onUserListScroll = { ctx.scroller.onUserScroll(it) },
+                conversationListEpoch = { ctx.sessionStore.epochFor(it) },
+                isBlankConversation = { ctx.isBlankSession() },
+            ),
+            composer = DshComposerUi(
+                draft = { ctx.draft },
+                skills = { ctx.skills },
+                onPickSkill = { ctx.draft = "/$it " },
+                keyboardHeight = { ctx.keyboardHeight },
+                keyboardAnimation = { ctx.keyboardAnimation },
+                inputRef = { ctx.inputView = it.view },
+                onInputFocusChange = { ctx.inputFocused = it },
+                onDraftChange = { ctx.draft = it },
+                onKeyboardHeightChange = { ctx.updateKeyboard(it) },
+                onSend = { ctx.sendDraft() },
+                onStop = { ctx.stopStream() },
+                modelLabel = { ctx.models.selectedLabel },
+                attachmentMenuVisible = { ctx.attachmentMenuVisible },
+                voiceActive = { ctx.voiceActive },
+                onOpenModels = { ctx.openModelPicker() },
+                onToggleAttachments = {
+                    ctx.dismissKeyboard()
+                    ctx.attachmentMenuVisible = !ctx.attachmentMenuVisible
+                },
+                onToggleVoice = { ctx.toggleVoice() },
+            ),
+            disclosures = DshMessageActionsUi(
+                isDisclosureExpanded = { ctx.disclosures.isExpanded(it) },
+                onToggleDisclosure = { ctx.disclosures.toggle(it) },
+                isBodyDisclosureExpanded = { ctx.disclosures.isBodyExpanded(it) },
+                onToggleBodyDisclosure = { ctx.disclosures.toggleBody(it) },
+                isJsonNodeExpanded = { messageId, nodeId -> ctx.disclosures.isJsonNodeExpanded(messageId, nodeId) },
+                onToggleJsonNode = { messageId, nodeId -> ctx.disclosures.toggleJsonNode(messageId, nodeId) },
+                onCopyToolContent = {
+                    ctx.bridgeModule.copyToPasteboard(it)
+                    ctx.bridgeModule.toast("已复制")
+                },
+                attachmentDataUrl = { sessionId, id -> ctx.attachments.dataUrl(sessionId, id) },
+            ),
+            turn = DshTurnUi(
+                streaming = { ctx.turn.streaming },
+                streamingMessageId = { ctx.turn.liveId },
+                streamingContent = { ctx.turn.liveContent },
+                stopButtonVisible = { ctx.turn.stopButtonVisible },
+                sessionRunning = { ctx.sessionRunning },
+                turnReconnecting = { ctx.connection.reconnecting },
+                turnElapsedMs = { ctx.turnStatus.elapsedMs },
+            ),
+            panels = DshSessionPanelsUi(
+                queue = DshQueueUi(
+                    items = { ctx.queue.items },
+                    expanded = { ctx.queue.expanded },
+                    editingId = { ctx.queue.editingId },
+                    actionBusy = { ctx.queue.actionBusy },
+                    editingText = { ctx.queue.editingText },
+                    toggle = ctx.queue::toggle,
+                    edit = ctx.queue::edit,
+                    updateEditingText = ctx.queue::updateEditingText,
+                    save = ctx.queue::save,
+                    cancelEdit = ctx.queue::cancelEdit,
+                    remove = ctx.queue::remove,
+                    steer = ctx.queue::steer,
+                ),
+                jobs = DshJobsUi(
+                    items = { ctx.jobs.items },
+                    expanded = { ctx.jobs.expanded },
+                    now = { ctx.jobs.now },
+                    toggle = ctx.jobs::toggle,
+                ),
+                goal = DshGoalUi(
+                    snapshot = { ctx.goal.snapshot },
+                    busy = { ctx.goal.busy },
+                    error = { ctx.goal.error },
+                    pause = ctx.goal::pause,
+                    resume = ctx.goal::resume,
+                    edit = ctx.goal::edit,
+                    clear = ctx.goal::clear,
+                ),
+                interactions = DshInteractionUi(
+                    pendingApproval = { ctx.interactions.pendingApproval },
+                    pendingQuestion = { ctx.interactions.pendingQuestion },
+                    selectedOptions = { ctx.interactions.selectedOptions },
+                    custom = { ctx.interactions.custom },
+                    index = { ctx.interactions.index },
+                    error = { ctx.interactions.error },
+                    busy = { ctx.interactions.busy },
+                    answerApproval = ctx.interactions::answerApproval,
+                    toggleOption = ctx.interactions::toggleOption,
+                    updateCustom = ctx.interactions::updateCustom,
+                    navigate = ctx.interactions::navigate,
+                    skip = ctx.interactions::skip,
+                    submit = ctx.interactions::submit,
+                ),
+            ),
             availableWidth = availableWidth,
         )
     }
