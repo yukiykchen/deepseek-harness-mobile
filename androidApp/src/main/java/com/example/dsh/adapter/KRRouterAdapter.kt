@@ -14,6 +14,7 @@ object KRRouterAdapter : IKRRouterAdapter {
         pageData: JSONObject,
     ) {
         KuiklyRenderActivity.start(context, pageName, pageData)
+        if (pageData.optBoolean("replaceCurrentPage", false)) (context as? Activity)?.finish()
     }
 
     override fun closePage(context: Context) {

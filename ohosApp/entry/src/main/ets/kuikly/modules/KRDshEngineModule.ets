@@ -10,6 +10,7 @@ export class KRDshEngineModule extends KuiklyRenderBaseModule {
 
   call(method: string, params: KRAny, callback: KuiklyRenderCallback | null): KRAny {
     switch (method) {
+      case 'prepareSsh':
       case 'startSsh':
         callback?.(mapOf(
           ['phase', 'message', 'localPort', 'generation'],

@@ -9,7 +9,14 @@
 
 - (void)openPageWithName:(NSString *)pageName pageData:(NSDictionary *)pageData controller:(UIViewController *)controller {
     KuiklyRenderViewController *renderViewController = [[KuiklyRenderViewController alloc] initWithPageName:pageName pageData:pageData];
-    [controller.navigationController pushViewController:renderViewController animated:YES];
+    if ([pageData[@"replaceCurrentPage"] boolValue] && controller.navigationController.topViewController == controller) {
+        NSMutableArray *stack = [controller.navigationController.viewControllers mutableCopy];
+        [stack removeLastObject];
+        [stack addObject:renderViewController];
+        [controller.navigationController setViewControllers:stack animated:YES];
+    } else {
+        [controller.navigationController pushViewController:renderViewController animated:YES];
+    }
 }
 
 - (void)closePage:(UIViewController *)controller {

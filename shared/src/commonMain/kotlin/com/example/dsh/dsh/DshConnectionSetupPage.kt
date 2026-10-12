@@ -39,10 +39,7 @@ internal class DshConnectionSetupPage : BasePager() {
         set(value) {
             form.error = value
         }
-    private var fingerprintPending by observable("")
     private var localStore: DshLocalStore? = null
-    private var engineModule: DshEngineModule? = null
-    private var probeRepository: DshHostClient? = null
 
     override fun created() {
         super.created()
@@ -168,14 +165,11 @@ internal class DshConnectionSetupPage : BasePager() {
                             Text { attr { text(if (ctx.busy) "导入中..." else "导入私钥"); fontSize(14f); color(Color(0xFF4176E6)) }; event { click { if (!ctx.busy) ctx.form.pickKey() } } }
                         }
                     }
+                    vif({ ctx.connectionMode == DshConnectionMode.SSH }) {
+                        DshConnectionInput("私钥口令（如有）", { ctx.form.passphrase }, "仅本次连接使用", { ctx.form.passphrase = it }, password = true)
+                    }
                     vif({ ctx.error.isNotEmpty() }) {
                         Text { attr { text(ctx.error); marginTop(12f); fontSize(13f); lineHeight(19f); color(Color(0xFFBF3535)) } }
-                    }
-                    vif({ ctx.fingerprintPending.isNotEmpty() }) {
-                        Text {
-                            attr { text("确认并继续使用此 SSH 主机指纹"); marginTop(10f); fontSize(13f); color(Color(0xFF4176E6)) }
-                            event { click { if (!ctx.busy) ctx.trustFingerprint() } }
-                        }
                     }
                     View { attr { flex(1f) } }
                     Button {
@@ -268,73 +262,26 @@ internal class DshConnectionSetupPage : BasePager() {
                 }
                 runCatching { localStore?.saveRemoteProfile(profile) }
                 runCatching { localStore?.saveLastConnectionMode(DshConnectionMode.SSH) }
-                probeRemote(profile)
+                acquireModule<DshEngineModule>(DshEngineModule.MODULE_NAME).prepareSsh(form.toSshConfig(profile)) { preparedId, message ->
+                    setTimeout(pagerId, 0) {
+                        busy = false
+                        if (preparedId.isEmpty()) {
+                            error = message.ifEmpty { "无法准备本次 SSH 连接" }
+                        } else {
+                            form.passphrase = ""
+                            openHome(preparedId)
+                        }
+                    }
+                }
             }
         }
     }
 
-    private fun probeRemote(profile: DshRemoteProfile) {
-        val module = acquireModule<DshEngineModule>(DshEngineModule.MODULE_NAME)
-        engineModule = module
-        error = "正在连接 SSH 并检查远程 DSH"
-        module.startSsh(form.toSshConfig(profile)) { state ->
-            when (state.phase) {
-                DshSshPhase.FINGERPRINT_REQUIRED -> {
-                    busy = false
-                    fingerprintPending = state.message
-                    error = "首次连接需要确认主机指纹：${state.message}"
-                    form.fingerprint = state.message
-                }
-                DshSshPhase.READY -> {
-                        val repository = DshHostClient(
-                        network = acquireModule(com.tencent.kuikly.core.module.NetworkModule.MODULE_NAME),
-                        webSocket = acquireModule(DshWebSocketModule.MODULE_NAME),
-                        connection = DshHostConnection("http://127.0.0.1:${state.localPort}"),
-                        pagerId = pagerId,
-                    )
-                    probeRepository = repository
-                        repository.loadSessions({
-                            setTimeout(pagerId, 0) {
-                                busy = false
-                                error = ""
-                                probeRepository?.stop()
-                                module.stopSsh()
-                                openHome()
-                            }
-                        }, { message ->
-                            setTimeout(pagerId, 0) {
-                                busy = false
-                                error = "远程 DSH 不可用：$message"
-                                probeRepository?.stop()
-                                module.stopSsh()
-                            }
-                    })
-                }
-                DshSshPhase.ERROR -> {
-                    busy = false
-                    error = state.message.ifEmpty { "SSH 连接失败" }
-                    module.stopSsh()
-                }
-                else -> error = state.message.ifEmpty { "正在连接 SSH" }
-            }
-        }
-    }
-
-    private fun trustFingerprint() {
-        val fingerprint = fingerprintPending
-        if (fingerprint.isBlank()) return
-        form.fingerprint = fingerprint
-        engineModule?.trustSshFingerprint(fingerprint)
-        val profile = form.toProfile()
-        localStore?.saveRemoteProfile(profile)
-        fingerprintPending = ""
-        error = ""
-        probeRemote(profile)
-    }
-
-    private fun openHome() {
+    private fun openHome(preparedSshId: String = "") {
         acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage("home", JSONObject().apply {
             put("pageName", "home")
+            put("replaceCurrentPage", true)
+            if (preparedSshId.isNotEmpty()) put("preparedSshId", preparedSshId)
             put("connectionMode", when (connectionMode) {
                 DshConnectionMode.RELAY -> "relay"
                 DshConnectionMode.SSH -> "ssh"

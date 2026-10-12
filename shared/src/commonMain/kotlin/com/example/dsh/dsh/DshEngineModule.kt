@@ -7,16 +7,15 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 internal class DshEngineModule : Module() {
     override fun moduleName(): String = MODULE_NAME
 
-    fun startSsh(config: DshSshConfig, onState: (DshSshState) -> Unit) {
-        val params = JSONObject().apply {
-            put("host", config.host)
-            put("port", config.port)
-            put("username", config.username)
-            put("remoteDshPort", config.remoteDshPort)
-            put("keyId", config.keyId)
-            put("hostFingerprint", config.hostFingerprint)
-            put("keyPassphrase", config.keyPassphrase)
-        }
+    /** Native memory holds the one-use draft; route parameters carry only its opaque id. */
+    fun prepareSsh(config: DshSshConfig, onPrepared: (String, String) -> Unit) {
+        toNative(false, "prepareSsh", config.toJson().toString(), { value ->
+            onPrepared(value?.optString("preparedId").orEmpty(), value?.optString("error").orEmpty())
+        }, false)
+    }
+
+    fun startSsh(config: DshSshConfig, preparedId: String = "", onState: (DshSshState) -> Unit) {
+        val params = config.toJson().apply { if (preparedId.isNotEmpty()) put("preparedId", preparedId) }
         toNative(
             keepCallbackAlive = true,
             methodName = "startSsh",
@@ -32,6 +31,16 @@ internal class DshEngineModule : Module() {
             },
             syncCall = false,
         )
+    }
+
+    private fun DshSshConfig.toJson(): JSONObject = JSONObject().apply {
+        put("host", host)
+        put("port", port)
+        put("username", username)
+        put("remoteDshPort", remoteDshPort)
+        put("keyId", keyId)
+        put("hostFingerprint", hostFingerprint)
+        put("keyPassphrase", keyPassphrase)
     }
 
     fun trustSshFingerprint(fingerprint: String) {

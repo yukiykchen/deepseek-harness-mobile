@@ -47,11 +47,33 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 attachmentMenuVisible = false
             }
             override fun onSettingsVisibilityChanged(visible: Boolean) = dimSystemBars(visible)
+            override fun beforeConnectionChange() {
+                turn.detach()
+                sessionStore.persist(activeSessionId)
+            }
             override fun onSettingsSaved() {
                 stopCurrentEngine()
-                openConnectionSetup()
+                models.reset()
+                queue.reset()
+                interactions.reset()
+                attachments.clear()
+                sessionRunning = false
+                sessions.clear()
+                visibleSessions.clear()
+                conversationPanelIds.toList().forEach(scroller::forget)
+                conversationPanelIds.clear()
+                pendingSessionSelections.clear()
+                preferBlankHomeOnNextLoad = true
+                if (!connection.sshMode && runCatching { localStore?.loadRelayProfile() }.getOrNull() == null) {
+                    acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage("connection_setup", JSONObject().apply {
+                        put("pageName", "connection_setup")
+                        put("replaceCurrentPage", true)
+                    })
+                } else {
+                    connection.start()
+                }
             }
-            override fun onSetupRequired() = openConnectionSetup()
+            override fun onSetupRequired() = connection.openSettings(preserveError = true)
         },
     )
     override val hostClient: DshHostClient?
@@ -191,6 +213,7 @@ internal class DshHomePage : BasePager(), DshHomeContext {
                 else -> DshConnectionMode.RELAY
             },
             profileId = pageData.params.optString("profileId").ifEmpty { DshSessionScope.DEFAULT_REMOTE_PROFILE_ID },
+            preparedSshId = pageData.params.optString("preparedSshId"),
         )
         restoreCachedSessions()
         if (sessions.isEmpty()) {
@@ -721,16 +744,9 @@ internal class DshHomePage : BasePager(), DshHomeContext {
     }
 
     private fun stopCurrentEngine() {
+        turn.detach()
         connection.stop()
         goal.reset()
-        turn.detach()
-    }
-
-    private fun openConnectionSetup() {
-        acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(
-            "connection_setup",
-            JSONObject().apply { put("pageName", "connection_setup") },
-        )
     }
 
     private fun closeCredentialSettings() {

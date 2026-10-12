@@ -35,6 +35,7 @@ internal class DshConnectionController(
         fun onSettingsVisibilityChanged(visible: Boolean)
 
         /** Connection settings were saved; the page should restart through the setup page. */
+        fun beforeConnectionChange()
         fun onSettingsSaved()
 
         /** SSH needs user input (fingerprint or error) on the setup page. */
@@ -43,6 +44,7 @@ internal class DshConnectionController(
 
     var mode by observable(DshConnectionMode.RELAY)
         private set
+    private var settingsMode by observable(DshConnectionMode.RELAY)
     var remoteProfileId by observable(DshSessionScope.DEFAULT_REMOTE_PROFILE_ID)
         private set
     /** Connection status shown in the top bar; the page also writes turn progress here. */
@@ -55,7 +57,7 @@ internal class DshConnectionController(
         private set
 
     val sshMode: Boolean
-        get() = mode == DshConnectionMode.SSH
+        get() = settingsMode == DshConnectionMode.SSH
 
     val sessionScope: DshSessionScope
         get() = DshSessionScope(mode, remoteProfileId)
@@ -70,9 +72,12 @@ internal class DshConnectionController(
     private val coordinator = DshConnectionCoordinator()
     private var engineModule: DshEngineModule? = null
     private var relayEndpoint = ""
+    private var preparedSshId = ""
 
-    fun configure(mode: DshConnectionMode, profileId: String) {
+    fun configure(mode: DshConnectionMode, profileId: String, preparedSshId: String = "") {
+        this.preparedSshId = preparedSshId
         this.mode = mode
+        settingsMode = mode
         remoteProfileId = profileId
         sshForm.load(runCatching { localStore()?.loadRemoteProfile() }.getOrNull())
     }
@@ -137,13 +142,14 @@ internal class DshConnectionController(
     fun openSettings(preserveError: Boolean = false) {
         listener.beforeSettingsShown()
         if (!preserveError) sshForm.error = ""
+        settingsMode = mode
         showSettings(true)
     }
 
     fun closeSettings() = showSettings(false)
 
     fun selectMode(useSsh: Boolean) {
-        mode = if (useSsh) DshConnectionMode.SSH else DshConnectionMode.RELAY
+        settingsMode = if (useSsh) DshConnectionMode.SSH else DshConnectionMode.RELAY
         sshForm.error = ""
     }
 
@@ -162,6 +168,13 @@ internal class DshConnectionController(
             runCatching { localStore()?.saveLastConnectionMode(DshConnectionMode.SSH) }
         } else {
             runCatching { localStore()?.saveLastConnectionMode(DshConnectionMode.RELAY) }
+        }
+        listener.beforeConnectionChange()
+        mode = settingsMode
+        remoteProfileId = if (sshMode) {
+            runCatching { localStore()?.loadRemoteProfile()?.profileId }.getOrNull() ?: DshSessionScope.DEFAULT_REMOTE_PROFILE_ID
+        } else {
+            runCatching { localStore()?.loadRelayProfile()?.hostId }.getOrNull() ?: DshSessionScope.DEFAULT_REMOTE_PROFILE_ID
         }
         showSettings(false)
         listener.onSettingsSaved()
@@ -202,6 +215,10 @@ internal class DshConnectionController(
                     connectHost(endpoint, state.localToken)
                 }
                 DshRelayPhase.ERROR -> {
+                    client?.stop()
+                    client = null
+                    runtimePhase = DshHostRuntimePhase.ERROR
+                    reconnecting = false
                     relayEndpoint = ""
                     statusLabel = state.message.ifEmpty { "扫码连接失败" }
                 }
@@ -209,6 +226,8 @@ internal class DshConnectionController(
                     relayEndpoint = ""
                     client?.stop()
                     client = null
+                    runtimePhase = DshHostRuntimePhase.RECONNECTING
+                    reconnecting = true
                     statusLabel = "扫码连接重试中"
                     listener.onTransportStateChanged()
                 }
@@ -216,6 +235,8 @@ internal class DshConnectionController(
                     relayEndpoint = ""
                     client?.stop()
                     client = null
+                    runtimePhase = DshHostRuntimePhase.STOPPED
+                    reconnecting = false
                     statusLabel = "扫码连接已断开"
                 }
                 else -> {
@@ -235,7 +256,9 @@ internal class DshConnectionController(
         val module = sshModule()
         engineModule = module
         statusLabel = "正在连接 SSH"
-        module.startSsh(sshForm.toSshConfig()) { state ->
+        val preparedId = preparedSshId
+        preparedSshId = ""
+        module.startSsh(sshForm.toSshConfig(), preparedId) { state ->
             if (!isCurrent(generation, DshConnectionMode.SSH)) return@startSsh
             when (state.phase) {
                 DshSshPhase.FINGERPRINT_REQUIRED -> {
@@ -247,8 +270,17 @@ internal class DshConnectionController(
                     statusLabel = "正在检查远程 DSH"
                     connectHost("http://127.0.0.1:${state.localPort}")
                 }
-                DshSshPhase.RECONNECTING -> statusLabel = "SSH 重连中"
+                DshSshPhase.RECONNECTING -> {
+                    client?.stop()
+                    client = null
+                    runtimePhase = DshHostRuntimePhase.RECONNECTING
+                    reconnecting = true
+                    statusLabel = "SSH 重连中"
+                    listener.onTransportStateChanged()
+                }
                 DshSshPhase.ERROR -> {
+                    runtimePhase = DshHostRuntimePhase.ERROR
+                    reconnecting = false
                     statusLabel = "SSH 连接失败"
                     sshForm.error = state.message
                     listener.onSetupRequired()
