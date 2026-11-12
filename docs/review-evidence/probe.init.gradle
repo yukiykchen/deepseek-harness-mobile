@@ -1,0 +1,19 @@
+gradle.projectsEvaluated {
+    def shared = gradle.rootProject.findProject(':shared')
+    if (shared == null) return
+    shared.tasks.register('reviewProductionProbe') {
+        dependsOn 'compileDebugUnitTestKotlinAndroid'
+        doLast {
+            def classpath = shared.tasks.getByName('testDebugUnitTest').classpath.asPath
+            def source = shared.rootProject.file('docs/review-evidence/StoreAndStreamProbe.java')
+            def output = java.nio.file.Files.createTempDirectory('dsh-review-probe-').toFile()
+            shared.exec {
+                commandLine "${System.getProperty('java.home')}/bin/javac", '-cp', classpath, '-d', output.absolutePath, source.absolutePath
+            }
+            shared.exec {
+                commandLine "${System.getProperty('java.home')}/bin/java", '-cp', classpath + File.pathSeparator + output.absolutePath, 'StoreAndStreamProbe'
+            }
+            output.deleteDir()
+        }
+    }
+}

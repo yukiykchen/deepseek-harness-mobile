@@ -5,14 +5,6 @@
 #import <OpenKuiklyIOSRender/NSObject+KR.h>
 #import "iosApp-Swift.h"
 
-#define REQ_PARAM_KEY @"reqParam"
-#define CMD_KEY @"cmd"
-#define FROM_HIPPY_RENDER @"from_hippy_render"
-// 扩展桥接接口
-/*
- * @brief Native暴露接口到kotlin侧，提供kotlin侧调用native能力
- */
-
 @implementation HRBridgeModule
 
 @synthesize hr_rootView;
@@ -22,12 +14,6 @@
     NSString *content = params[@"content"];
     UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
     pasteboard.string = content;
-}
-
-- (void)log:(NSDictionary *)args {
-    NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
-    NSString *content = params[@"content"];
-    NSLog(@"KuiklyRender:%@", content);
 }
 
 - (void)toast:(NSDictionary *)args {
@@ -48,6 +34,10 @@
         dispatch_sync(dispatch_get_main_queue(), dismissKeyboard);
     }
     return @"true";
+}
+
+- (NSString *)currentTimestamp:(NSDictionary *)args {
+    return [NSString stringWithFormat:@"%lld", (long long)(NSDate.date.timeIntervalSince1970 * 1000)];
 }
 
 - (void)setSystemBarsDimmed:(NSDictionary *)args {
@@ -79,19 +69,14 @@
 - (void)validateSshKey:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    BOOL valid = [[DshSshKeyStore shared] validateKey:params[@"keyId"] ?: @""];
+    BOOL valid = [[DshSshKeyStore shared] validateKey:params[@"keyId"] ?: @""
+                                             passphrase:params[@"keyPassphrase"] ?: @""];
     if (callback) callback(@{ @"valid": @(valid) });
 }
 
 - (void)deleteSshKey:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
     [[DshSshKeyStore shared] deleteKey:params[@"keyId"] ?: @""];
-}
-
-- (void)startSshKeepAlive:(NSDictionary *)args {
-}
-
-- (void)stopSshKeepAlive:(NSDictionary *)args {
 }
 
 @end

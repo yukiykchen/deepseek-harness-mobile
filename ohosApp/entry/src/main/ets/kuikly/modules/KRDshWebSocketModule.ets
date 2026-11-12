@@ -10,6 +10,7 @@ class WebSocketConnection {
   private readonly emit: (event: Record<string, Object>) => void;
   private readonly onFinished: () => void;
   private socket: webSocket.WebSocket | null = null;
+  private slot: string = '';
   private closed: boolean = false;
   private finished: boolean = false;
 
@@ -18,11 +19,18 @@ class WebSocketConnection {
     token: string,
     emit: (event: Record<string, Object>) => void,
     onFinished: () => void,
+    slot: string,
   ) {
     this.url = url;
     this.token = token;
     this.emit = emit;
     this.onFinished = onFinished;
+    this.slot = slot;
+  }
+
+  setSlot(slot: string): void {
+    this.slot = slot;
+    if (this.finished || this.closed) DshOhosContext.unbindSlot(slot);
   }
 
   start(): void {
@@ -90,11 +98,11 @@ class WebSocketConnection {
   }
 
   private finish(): void {
-    if (this.finished) {
-      return;
+    if (!this.finished) {
+      this.finished = true;
+      this.onFinished();
     }
-    this.finished = true;
-    this.onFinished();
+    DshOhosContext.unbindSlot(this.slot);
   }
 }
 
@@ -116,21 +124,23 @@ export class KRDshWebSocketModule extends KuiklyRenderBaseModule {
       }
       this.connections.get(connectionId)?.close();
       dshLog('connect requested');
-      const slot = DshOhosContext.bindSlot((event: Record<string, Object>) => {
-        callback(event);
-        const kind = `${event['kind'] ?? ''}`;
-        if (kind === 'CLOSED' || kind === 'ERROR') {
-          DshOhosContext.unbindSlot(slot);
-        }
-      });
       const connection = new WebSocketConnection(
         url,
         jsonString(value, 'token'),
         (event: Record<string, Object>) => {
-          DshOhosContext.postToMain(slot, event);
+          DshOhosContext.postToMain(connection.slot, event);
         },
-        () => this.connections.delete(connectionId),
+        () => {
+          if (this.connections.get(connectionId) === connection) {
+            this.connections.delete(connectionId);
+          }
+        },
+        '',
       );
+      const slot = DshOhosContext.bindSlot((event: Record<string, Object>) => {
+        callback(event);
+      });
+      connection.setSlot(slot);
       this.connections.set(connectionId, connection);
       connection.start();
       return null;
@@ -141,6 +151,14 @@ export class KRDshWebSocketModule extends KuiklyRenderBaseModule {
       this.connections.delete(connectionId);
     }
     return null;
+  }
+
+  onDestroy(): void {
+    for (const connection of this.connections.values()) {
+      connection.close();
+    }
+    this.connections.clear();
+    super.onDestroy();
   }
 }
 

@@ -24,8 +24,8 @@ elif [ -e "$HAP_PATH/entry-default-unsigned.hap" ] && [ ! -e "$HAP_PATH/entry-de
 else
   for target_id in $($HDC_BIN list targets); do
   echo "install to $target_id"
-  $HDC_BIN -t "$target_id" shell aa force-stop com.example.dsh
+  $HDC_BIN -t "$target_id" shell aa force-stop io.github.yukiykchen.dsh
   $HDC_BIN -t "$target_id" install entry/build/default/outputs/default/entry-default-signed.hap
-  $HDC_BIN -t "$target_id" shell aa start -a EntryAbility -b com.example.dsh
+  $HDC_BIN -t "$target_id" shell aa start -a EntryAbility -b io.github.yukiykchen.dsh
   done
 fi

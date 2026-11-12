@@ -53,6 +53,8 @@ export class DshSecureCipher {
   private readonly receiveNonceBase: Uint8Array;
   private sendSequence: number = 0;
   private receiveSequence: number = 0;
+  private sendChain: Promise<void> = Promise.resolve();
+  private receiveChain: Promise<void> = Promise.resolve();
 
   constructor(
     accessSessionId: string,
@@ -72,24 +74,39 @@ export class DshSecureCipher {
     this.receiveNonceBase = receiveNonceBase;
   }
 
-  async seal(value: Record<string, Object>): Promise<DshSealedPayload> {
+  seal(value: Record<string, Object>): Promise<DshSealedPayload> {
+    const snapshot = JSON.stringify(value);
+    const result = this.sendChain.then(() => this.sealNext(snapshot));
+    this.sendChain = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private async sealNext(snapshot: string): Promise<DshSealedPayload> {
     const sequence = this.sendSequence;
+    if (!Number.isSafeInteger(sequence) || sequence >= Number.MAX_SAFE_INTEGER) throw new Error('sequence exhausted');
     this.sendSequence += 1;
     const ciphertext = await aesGcmSeal(
       this.sendKey,
       nonce(this.sendNonceBase, sequence),
       aad(this.sendDirection, this.accessSessionId, sequence),
-      utf8Encode(JSON.stringify(value)),
+      utf8Encode(snapshot),
     );
     return new DshSealedPayload(`${sequence}`, encodeBase64Url(ciphertext));
   }
 
-  async open(payload: DshSealedPayload): Promise<Record<string, Object>> {
+  open(payload: DshSealedPayload): Promise<Record<string, Object>> {
+    const snapshot = new DshSealedPayload(payload.seq, payload.ciphertextB64);
+    const result = this.receiveChain.then(() => this.openNext(snapshot));
+    this.receiveChain = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private async openNext(payload: DshSealedPayload): Promise<Record<string, Object>> {
     if (!/^(0|[1-9][0-9]*)$/.test(payload.seq)) {
       throw new Error('invalid sequence');
     }
     const sequence = Number(payload.seq);
-    if (sequence !== this.receiveSequence) {
+    if (!Number.isSafeInteger(sequence) || sequence >= Number.MAX_SAFE_INTEGER || sequence !== this.receiveSequence) {
       throw new Error('unexpected sequence');
     }
     const sealed = decodeBase64Url(payload.ciphertextB64);
@@ -103,8 +120,10 @@ export class DshSecureCipher {
         aad(this.receiveDirection, this.accessSessionId, sequence),
         sealed,
       );
+      const result = JSON.parse(utf8Decode(plaintext)) as Record<string, Object>;
+      if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('invalid sealed object');
       this.receiveSequence += 1;
-      return JSON.parse(utf8Decode(plaintext)) as Record<string, Object>;
+      return result;
     } catch (error) {
       dshError('ciphertext authentication failed', error as Object);
       throw new Error('ciphertext authentication failed');
@@ -176,6 +195,12 @@ export class DshSealedTunnelCrypto {
       material.d2cKey,
       material.d2cNonceBase,
     );
+  }
+
+  static async createHostCipher(master: string, session: string, client: string, server: string): Promise<DshSecureCipher> {
+    const material = await deriveMaterial(master, session, client, server);
+    return new DshSecureCipher(session, 'd2c', material.d2cKey, material.d2cNonceBase,
+      'c2d', material.c2dKey, material.c2dNonceBase);
   }
 }
 

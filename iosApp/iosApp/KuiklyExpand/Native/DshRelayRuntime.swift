@@ -1,643 +1,159 @@
 import Foundation
 import Network
 
+/// Objective-C bridge; connection state and resources belong to the core rather than the view controller.
 @objc(DshRelayRuntime)
-final class DshRelayRuntime: NSObject, URLSessionWebSocketDelegate {
+final class DshRelayRuntime: NSObject {
     @objc static let shared = DshRelayRuntime()
-
-    private let secrets = DshRelaySecrets()
     private let lock = NSLock()
     private var listeners: [UInt: (NSDictionary) -> Void] = [:]
     private var listenerSeq: UInt = 0
-    private var generation: Int64 = 0
-    private var connecting = false
-    private var stopped = true
-    private var loopback: DshRelayLoopbackServer?
-    private var webSocket: URLSessionWebSocketTask?
-    private var session: URLSession?
-    private var cipher: DshSecureCipher?
-    private var accessSessionId = ""
-    private var localToken = ""
-    private var hostName = ""
-    private var relayOrigin = ""
-    private var hostId = ""
-    private var state: [String: Any] = ["phase": "IDLE", "message": "", "localPort": 0, "localToken": "", "hostId": "", "hostName": "", "relayOrigin": "", "paired": false, "generation": 0]
-    private var pathMonitor: NWPathMonitor?
-    private var pendingHello: (master: String, clientRandomB64: String, generation: Int64, origin: String)?
-    private var pingTimer: Timer?
-    private let httpSession: URLSession
+    private var monitor: NWPathMonitor?
+    private let core: DshRelayCore
 
     private override init() {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.waitsForConnectivity = true
-        configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 45
-        configuration.allowsConstrainedNetworkAccess = true
-        configuration.allowsExpensiveNetworkAccess = true
-        httpSession = URLSession(configuration: configuration)
+        core = DshRelayCore(store: DshRelaySecrets(), transport: DshURLSessionRelayTransport(),
+            gatewayFactory: { DshRelayLoopbackServer(token: $0, sendInner: $1) },
+            schedule: { DshRelayWork(delay: $0, action: $1) })
         super.init()
-        restorePairing()
+        _ = core.addListener { [weak self] state in
+            DispatchQueue.main.async { [weak self] in self?.publishIfCurrent(state) }
+        }
     }
-
+    @objc func currentState() -> NSDictionary { core.current() as NSDictionary }
     @objc func addListener(_ block: @escaping (NSDictionary) -> Void) -> UInt {
-        lock.lock()
-        listenerSeq += 1
-        let token = listenerSeq
-        listeners[token] = block
-        let current = state as NSDictionary
-        lock.unlock()
-        block(current)
+        lock.lock(); listenerSeq += 1; let token = listenerSeq; listeners[token] = block; lock.unlock()
+        let state = core.current()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, (self.core.current() as NSDictionary).isEqual(to: state) else { return }
+            self.lock.lock(); let callback = self.listeners[token]; self.lock.unlock()
+            callback?(state as NSDictionary)
+        }
         return token
     }
+    @objc func removeListener(_ token: UInt) { lock.lock(); listeners.removeValue(forKey: token); lock.unlock() }
+    @objc func connect() { core.connect(); registerNetwork() }
+    @objc func disconnect() { core.disconnect(); unregisterNetwork() }
+    @objc func forgetPairing() { core.forget(); unregisterNetwork() }
 
-    @objc func removeListener(_ token: UInt) {
-        lock.lock()
-        listeners.removeValue(forKey: token)
-        lock.unlock()
-    }
+    @objc func beginPairing() -> Int64 { core.beginPairing() }
+    @objc func pairFromQr(_ qr: String) -> NSDictionary { pairFromQr(qr, generation: core.beginPairing()) }
 
-    @objc func currentState() -> NSDictionary {
-        lock.lock()
-        let current = state as NSDictionary
-        lock.unlock()
-        return current
-    }
-
-    @objc func pairFromQr(_ qr: String) -> NSDictionary {
-        publish(phase: "PAIRING", message: "正在配对")
+    @objc func pairFromQr(_ qr: String, generation: Int64) -> NSDictionary {
+        guard !Thread.isMainThread else { return ["ok": false, "message": "配对必须在后台线程运行"] }
+        guard core.isPairing(generation) else { return ["ok": false, "message": "配对操作已取消"] }
+        var token: Int64?
         do {
-            let link = try parsePairQr(qr)
-            let claimToken = try DshSealedTunnelCrypto.deriveClaimToken(masterKeyB64: link.masterKey)
-            let body: [String: Any] = [
-                "pairId": link.pairId,
-                "claimToken": claimToken,
-                "deviceLabel": "iOS",
-                "platform": "ios",
-            ]
+            let link = try dshParseRelayPairQr(qr)
+            let claim = try DshSealedTunnelCrypto.deriveClaimToken(masterKeyB64: link.master)
+            token = generation
+            guard core.isPairing(generation) else { return ["ok": false, "message": "配对操作已取消"] }
+            unregisterNetwork()
             DshLocalNetworkAccess.prepare(for: link.origin)
-            let json = try httpPost(url: "\(link.origin)/pair/claim-device", body: body, authorization: nil)
-            let http = json.http
-            let object = json.object
-            if !(200...299).contains(http) {
-                let reason = (object["error"] as? String)?.nilIfEmpty ?? "claim failed (\(http))"
-                publish(phase: "ERROR", message: reason, paired: secrets.hasPairing())
-                return ["ok": false, "message": reason]
-            }
-            let newHostId = object["hostId"] as? String ?? ""
-            let token = object["clientToken"] as? String ?? ""
-            let name = (object["hostName"] as? String)?.nilIfEmpty ?? "电脑"
-            guard !newHostId.isEmpty, !token.isEmpty else {
-                throw NSError(domain: "DshRelay", code: 1, userInfo: [NSLocalizedDescriptionKey: "pairing response missing credentials"])
-            }
-            secrets.save(masterKeyB64: link.masterKey, clientToken: token, hostId: newHostId, hostName: name, relayOrigin: link.origin)
-            hostId = newHostId
-            hostName = name
-            relayOrigin = link.origin
-            publish(phase: "IDLE", message: "已配对", hostId: newHostId, hostName: name, relayOrigin: link.origin, paired: true)
-            return [
-                "ok": true,
-                "hostId": newHostId,
-                "hostName": name,
-                "relayOrigin": link.origin,
-                "pairedAt": Int64(Date().timeIntervalSince1970 * 1000),
-            ]
+            guard let url = URL(string: link.origin + "/pair/claim-device") else { throw dshRelayError("二维码地址无效") }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["pairId": link.id, "claimToken": claim, "platform": "ios", "deviceLabel": "iOS"])
+            let box = DshPairResponse()
+            let call = DshRelayHttpOperation(request: request) { box.complete($0) }
+            core.registerPairingCall(generation, call)
+            guard box.signal.wait(timeout: .now() + 35) == .success else { call.cancel(); throw URLError(.timedOut) }
+            let json = try box.value().get()
+            let hostId = json["hostId"] as? String ?? ""
+            let clientToken = json["clientToken"] as? String ?? ""
+            guard !hostId.isEmpty, !clientToken.isEmpty else { throw dshRelayError("配对响应缺少凭据") }
+            let credentials = DshRelayCredentials(master: link.master, clientToken: clientToken, hostId: hostId,
+                hostName: json["hostName"] as? String ?? "电脑", origin: link.origin)
+            guard try core.completePairing(generation, credentials) else { return ["ok": false, "message": "配对操作已取消"] }
+            return ["ok": true, "hostId": hostId, "hostName": credentials.hostName, "relayOrigin": link.origin,
+                    "pairedAt": Int64(Date().timeIntervalSince1970 * 1000)]
         } catch {
-            let origin = (try? parsePairQr(qr).origin) ?? relayOrigin
-            let message = relayNetworkMessage(error, origin: origin)
-            publish(phase: "ERROR", message: message, paired: secrets.hasPairing())
+            // Server diagnostics may echo the QR master key or claim token.
+            let native = error as NSError
+            let message: String
+            if token == nil { message = error.localizedDescription }
+            else if native.domain == NSURLErrorDomain {
+                message = native.code == NSURLErrorCancelled ? "配对操作已取消" : dshRelayNetworkMessage(error)
+            } else { message = "配对失败，请检查网络与二维码后重试" }
+            core.failPairing(generation, message)
             return ["ok": false, "message": message]
         }
     }
-
-    @objc func connect() {
-        if loopbackListening() {
-            stopped = false
-            registerNetwork()
-            NSLog("[DshRelay] reusing loopback port=%d", loopback?.port ?? 0)
-            return
+    private func publishIfCurrent(_ state: [String: Any]) {
+        guard (core.current() as NSDictionary).isEqual(to: state) else { return }
+        lock.lock(); let tokens = listeners.keys.sorted(); lock.unlock()
+        for token in tokens {
+            guard (core.current() as NSDictionary).isEqual(to: state) else { break }
+            lock.lock(); let callback = listeners[token]; lock.unlock()
+            callback?(state as NSDictionary)
         }
-        lock.lock()
-        if connecting {
-            lock.unlock()
-            return
-        }
-        connecting = true
-        stopped = false
-        lock.unlock()
-        registerNetwork()
-        dropLoopback("new-connect")
-        publish(
-            phase: "CONNECTING",
-            message: "正在申请访问票",
-            hostId: hostId,
-            hostName: hostName,
-            relayOrigin: relayOrigin,
-            paired: secrets.hasPairing(),
-            generation: generation
-        )
-        Thread.detachNewThread { [weak self] in
-            self?.connectInternal()
+        if (core.current() as NSDictionary).isEqual(to: state), ["STOPPED", "ERROR", "PAIRING"].contains(state["phase"] as? String) {
+            unregisterNetwork()
         }
     }
-
-    @objc func disconnect() {
-        stopped = true
-        lock.lock()
-        generation += 1
-        connecting = false
-        lock.unlock()
-        unregisterNetwork()
-        webSocket?.cancel(with: .goingAway, reason: nil)
-        webSocket = nil
-        session?.invalidateAndCancel()
-        session = nil
-        cipher = nil
-        pendingHello = nil
-        stopTunnelPing()
-        dropLoopback("disconnect")
-        publish(phase: "STOPPED", message: "扫码连接已断开", hostId: hostId, hostName: hostName, relayOrigin: relayOrigin, paired: secrets.hasPairing())
-    }
-
-    @objc func forgetPairing() {
-        disconnect()
-        secrets.clear()
-        hostId = ""
-        hostName = ""
-        relayOrigin = ""
-        publish(phase: "IDLE", message: "已移除配对")
-    }
-
-    private func restorePairing() {
-        guard secrets.hasPairing() else { return }
-        hostId = secrets.hostId() ?? ""
-        hostName = secrets.hostName() ?? ""
-        relayOrigin = secrets.relayOrigin() ?? ""
-        publish(phase: "IDLE", message: "", hostId: hostId, hostName: hostName, relayOrigin: relayOrigin, paired: true)
-    }
-
-    private func connectInternal() {
-        lock.lock()
-        generation += 1
-        let myGeneration = generation
-        lock.unlock()
-        defer {
-            lock.lock()
-            connecting = false
-            lock.unlock()
-        }
-        do {
-            guard let master = secrets.masterKey(), let clientToken = secrets.clientToken() else {
-                throw NSError(domain: "DshRelay", code: 2, userInfo: [NSLocalizedDescriptionKey: "not paired"])
-            }
-            let origin = (secrets.relayOrigin() ?? "").nilIfEmpty ?? relayOrigin.nilIfEmpty ?? "http://127.0.0.1:8787"
-            hostId = secrets.hostId() ?? ""
-            hostName = (secrets.hostName() ?? "").nilIfEmpty ?? hostName
-            relayOrigin = origin
-            DshLocalNetworkAccess.prepare(for: origin)
-            publish(phase: "CONNECTING", message: "正在申请访问票", hostId: hostId, hostName: hostName, relayOrigin: origin, paired: true, generation: myGeneration)
-            let ticket = try httpPost(
-                url: "\(origin)/access-ticket",
-                body: [:],
-                authorization: "Bearer \(clientToken)"
-            )
-            if !(200...299).contains(ticket.http) {
-                throw NSError(
-                    domain: "DshRelay",
-                    code: ticket.http,
-                    userInfo: [NSLocalizedDescriptionKey: (ticket.object["error"] as? String)?.nilIfEmpty ?? "ticket failed"]
-                )
-            }
-            accessSessionId = ticket.object["accessSessionId"] as? String ?? ""
-            let ticketValue = ticket.object["ticket"] as? String ?? ""
-            let tunnelUrl = (ticket.object["tunnelUrl"] as? String)?.nilIfEmpty ?? (toWs(origin) + "/client-tunnel")
-            hostId = (ticket.object["hostId"] as? String)?.nilIfEmpty ?? hostId
-            guard !ticketValue.isEmpty, !accessSessionId.isEmpty else {
-                throw NSError(domain: "DshRelay", code: 3, userInfo: [NSLocalizedDescriptionKey: "ticket response incomplete"])
-            }
-            publish(phase: "HANDSHAKING", message: "正在建立加密隧道", hostId: hostId, hostName: hostName, relayOrigin: origin, paired: true, generation: myGeneration)
-            let clientRandomB64 = DshSealedTunnelCrypto.encodeBase64Url(DshSealedTunnelCrypto.randomBytes())
-            let hello = envelope(
-                type: "client_hello",
-                payload: [
-                    "accessSessionId": accessSessionId,
-                    "clientRandomB64": clientRandomB64,
-                    "clientProofB64": try DshSealedTunnelCrypto.clientProof(
-                        masterKeyB64: master,
-                        accessSessionId: accessSessionId,
-                        clientRandomB64: clientRandomB64
-                    ),
-                ]
-            )
-            pendingHello = (master, clientRandomB64, myGeneration, origin)
-            var request = URLRequest(url: URL(string: tunnelUrl)!)
-            request.setValue("Bearer \(ticketValue)", forHTTPHeaderField: "Authorization")
-            let configuration = URLSessionConfiguration.default
-            configuration.waitsForConnectivity = true
-            configuration.timeoutIntervalForRequest = .infinity
-            configuration.timeoutIntervalForResource = .infinity
-            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-            self.session = session
-            let socket = session.webSocketTask(with: request)
-            webSocket = socket
-            socket.resume()
-            startTunnelPing(socket)
-            send(hello, on: socket)
-            receive(on: socket)
-        } catch {
-            let message = relayNetworkMessage(error, origin: relayOrigin)
-            NSLog("[DshRelay] connect failed: %@", message)
-            if !stopped && myGeneration == currentGeneration() {
-                publish(phase: "ERROR", message: message, hostId: hostId, hostName: hostName, relayOrigin: relayOrigin, paired: true, generation: myGeneration)
-                scheduleReconnect()
-            }
-        }
-    }
-
-    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {}
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        lock.lock()
-        let myGeneration = generation
-        lock.unlock()
-        if stopped || myGeneration != currentGeneration() { return }
-        if let error {
-            let message = relayNetworkMessage(error, origin: relayOrigin)
-            NSLog("[DshRelay] relay socket failed: %@", message)
-            publish(phase: "ERROR", message: message)
-        }
-        scheduleReconnect()
-    }
-
-    private func receive(on socket: URLSessionWebSocketTask) {
-        socket.receive { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .failure(let error):
-                if !self.stopped {
-                    let message = self.relayNetworkMessage(error, origin: self.relayOrigin)
-                    NSLog("[DshRelay] relay socket failed: %@", message)
-                    self.publish(phase: "ERROR", message: message)
-                    self.scheduleReconnect()
-                }
-            case .success(let message):
-                if self.stopped { return }
-                if case .string(let text) = message {
-                    self.handleOuter(text)
-                }
-                self.receive(on: socket)
-            }
-        }
-    }
-
-    private func handleOuter(_ text: String) {
-        guard let hello = pendingHello ?? optionalHello(),
-              currentGeneration() == hello.generation || pendingHello != nil else { return }
-        let myGeneration = pendingHello?.generation ?? hello.generation
-        if stopped || myGeneration != currentGeneration() { return }
-        guard let msg = jsonObject(text) else { return }
-        let type = msg["type"] as? String ?? ""
-        switch type {
-        case "server_hello":
-            let payload = msg["payload"] as? [String: Any] ?? [:]
-            do {
-                cipher = try DshSealedTunnelCrypto.createClientCipher(
-                    masterKeyB64: hello.master,
-                    accessSessionId: accessSessionId,
-                    clientRandomB64: hello.clientRandomB64,
-                    serverRandomB64: payload["serverRandomB64"] as? String ?? "",
-                    serverProofB64: payload["serverProofB64"] as? String ?? ""
-                )
-                startLoopback(myGeneration: myGeneration, origin: hello.origin)
-            } catch {
-                publish(phase: "ERROR", message: error.localizedDescription.nilIfEmpty ?? "握手失败")
-                scheduleReconnect()
-            }
-        case "sealed":
-            let payload = msg["payload"] as? [String: Any] ?? [:]
-            let sealed = DshSealedPayload(seq: payload["seq"] as? String ?? "", ciphertextB64: payload["ciphertextB64"] as? String ?? "")
-            guard let opened = try? cipher?.open(sealed) else { return }
-            loopback?.onInner(
-                type: opened["type"] as? String ?? "",
-                payload: opened["payload"] as? [String: Any] ?? [:],
-                channel: opened["channel"] as? String ?? ""
-            )
-        case "device_close", "close":
-            if !stopped { scheduleReconnect() }
-        default:
-            break
-        }
-    }
-
-    private func startLoopback(myGeneration: Int64, origin: String) {
-        dropLoopback("replace")
-        localToken = DshSealedTunnelCrypto.encodeBase64Url(DshSealedTunnelCrypto.randomBytes(24))
-        let server = DshRelayLoopbackServer(token: localToken) { [weak self] type, payload, channel in
-            self?.sendInner(type: type, payload: payload, channel: channel)
-        }
-        do {
-            let port = try server.start()
-            loopback = server
-            NSLog("[DshRelay] loopback listening port=%d", port)
-            publish(
-                phase: "READY",
-                message: "扫码隧道已连接",
-                localPort: port,
-                localToken: localToken,
-                hostId: hostId,
-                hostName: hostName,
-                relayOrigin: origin,
-                paired: true,
-                generation: myGeneration
-            )
-        } catch {
-            publish(phase: "ERROR", message: "无法启动本机网关")
-            scheduleReconnect()
-        }
-    }
-
-    private func sendInner(type: String, payload: [String: Any], channel: String) {
-        guard let cipher else { return }
-        guard let sealed = try? cipher.seal(envelope(type: type, payload: payload, channel: channel)) else { return }
-        send(
-            envelope(
-                type: "sealed",
-                payload: [
-                    "accessSessionId": accessSessionId,
-                    "seq": sealed.seq,
-                    "ciphertextB64": sealed.ciphertextB64,
-                ]
-            )
-        )
-    }
-
-    private func envelope(type: String, payload: [String: Any], channel: String? = nil) -> [String: Any] {
-        var object: [String: Any] = [
-            "v": 1,
-            "type": type,
-            "id": UUID().uuidString,
-            "ts": NSNumber(value: Int64(Date().timeIntervalSince1970 * 1000)),
-            "payload": payload,
-        ]
-        if let channel { object["channel"] = channel }
-        return object
-    }
-
-    private func send(_ object: [String: Any], on socket: URLSessionWebSocketTask? = nil) {
-        guard let data = try? JSONSerialization.data(withJSONObject: object),
-              let text = String(data: data, encoding: .utf8) else { return }
-        (socket ?? webSocket)?.send(.string(text)) { _ in }
-    }
-
-    private func loopbackListening() -> Bool {
-        lock.lock()
-        let phase = state["phase"] as? String
-        let localPort = state["localPort"] as? Int ?? 0
-        lock.unlock()
-        return phase == "READY" && localPort > 0 && loopback?.port == localPort && loopback?.isListening() == true
-    }
-
-    private func dropLoopback(_ reason: String) {
-        let port = loopback?.port ?? 0
-        loopback?.stop()
-        loopback = nil
-        localToken = ""
-        if port > 0 {
-            NSLog("[DshRelay] loopback stopped port=%d reason=%@", port, reason)
-        }
-    }
-
-    private func startTunnelPing(_ socket: URLSessionWebSocketTask) {
-        stopTunnelPing()
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let timer = Timer(timeInterval: 20, repeats: true) { [weak socket] _ in
-                socket?.sendPing { error in
-                    if let error {
-                        NSLog("[DshRelay] tunnel ping failed: %@", error.localizedDescription)
-                    }
-                }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            self.pingTimer = timer
-        }
-    }
-
-    private func stopTunnelPing() {
-        DispatchQueue.main.async { [weak self] in
-            self?.pingTimer?.invalidate()
-            self?.pingTimer = nil
-        }
-    }
-
-    private func scheduleReconnect() {
-        if stopped { return }
-        stopTunnelPing()
-        dropLoopback("reconnect")
-        publish(phase: "RECONNECTING", message: "扫码连接重试中", localPort: 0, localToken: "")
-        Thread.detachNewThread { [weak self] in
-            Thread.sleep(forTimeInterval: 2)
-            guard let self, !self.stopped else { return }
-            self.lock.lock()
-            let already = self.connecting
-            if !already { self.connecting = true }
-            self.lock.unlock()
-            if !already { self.connectInternal() }
-        }
-    }
-
-    private func parsePairQr(_ raw: String) throws -> (origin: String, pairId: String, masterKey: String) {
-        guard let uri = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            throw NSError(domain: "DshRelay", code: 4, userInfo: [NSLocalizedDescriptionKey: "二维码缺少配对参数"])
-        }
-        let fragment = uri.fragment ?? ""
-        let fromFragment: String
-        if fragment.isEmpty {
-            fromFragment = ""
-        } else if let idx = fragment.firstIndex(of: "?") {
-            fromFragment = String(fragment[fragment.index(after: idx)...])
-        } else {
-            fromFragment = fragment
-        }
-        let query = fromFragment.isEmpty ? (uri.query ?? "") : fromFragment
-        var params: [String: String] = [:]
-        for part in query.split(separator: "&") {
-            let pieces = part.split(separator: "=", maxSplits: 1).map(String.init)
-            let key = pieces.first?.removingPercentEncoding ?? ""
-            let value = pieces.count > 1 ? (pieces[1].removingPercentEncoding ?? pieces[1]) : ""
-            params[key] = value
-        }
-        let id = params["id"] ?? ""
-        let key = params["key"] ?? ""
-        guard !id.isEmpty, !key.isEmpty else {
-            throw NSError(domain: "DshRelay", code: 4, userInfo: [NSLocalizedDescriptionKey: "二维码缺少配对参数"])
-        }
-        guard let scheme = uri.scheme, let host = uri.host else {
-            throw NSError(domain: "DshRelay", code: 4, userInfo: [NSLocalizedDescriptionKey: "二维码缺少配对参数"])
-        }
-        if host == "127.0.0.1" || host == "localhost" {
-            throw NSError(
-                domain: "DshRelay",
-                code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "二维码指向电脑本机 \(host)，手机连不上。请在电脑上设置 PUBLIC_RELAY_URL 为局域网地址后重新生成二维码。"]
-            )
-        }
-        let origin: String
-        if let port = uri.port {
-            origin = "\(scheme)://\(host):\(port)"
-        } else {
-            origin = "\(scheme)://\(host)"
-        }
-        return (origin, id, key)
-    }
-
-    private func toWs(_ origin: String) -> String {
-        if origin.hasPrefix("https:") { return origin.replacingOccurrences(of: "https:", with: "wss:", options: .anchored) }
-        return origin.replacingOccurrences(of: "http:", with: "ws:", options: .anchored)
-    }
-
-    private func httpPost(url: String, body: [String: Any], authorization: String?) throws -> (http: Int, object: [String: Any]) {
-        guard let endpoint = URL(string: url) else {
-            throw NSError(domain: "DshRelay", code: 5, userInfo: [NSLocalizedDescriptionKey: "invalid url"])
-        }
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        if let authorization { request.setValue(authorization, forHTTPHeaderField: "Authorization") }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        request.timeoutInterval = 20
-        let semaphore = DispatchSemaphore(value: 0)
-        var capturedData: Data?
-        var capturedResponse: HTTPURLResponse?
-        var capturedError: Error?
-        httpSession.dataTask(with: request) { data, response, error in
-            capturedData = data
-            capturedResponse = response as? HTTPURLResponse
-            capturedError = error
-            semaphore.signal()
-        }.resume()
-        semaphore.wait()
-        if let capturedError { throw capturedError }
-        let object = jsonObject(String(data: capturedData ?? Data(), encoding: .utf8) ?? "{}") ?? [:]
-        return (capturedResponse?.statusCode ?? 0, object)
-    }
-
-    private func relayNetworkMessage(_ error: Error, origin: String) -> String {
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain {
-            switch nsError.code {
-            case NSURLErrorAppTransportSecurityRequiresSecureConnection:
-                return "iOS 拦截了明文 HTTP（App Transport Security）。局域网 / Tailscale 扫码需要允许任意网络加载；请重装本版 App。公网 Relay 请改用 HTTPS。"
-            case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorCannotConnectToHost, NSURLErrorTimedOut, NSURLErrorDataNotAllowed, NSURLErrorCannotFindHost:
-                if DshRelayRuntime.isLocalRelayHost(origin) {
-                    return "连不上同一网络上的 Relay。请到「设置 > 隐私与安全性 > 本地网络」允许本 App，并确认手机与电脑在同一 Wi-Fi。"
-                }
-            default:
-                break
-            }
-        }
-        if nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENETDOWN) {
-            return "连不上同一网络上的 Relay。请到「设置 > 隐私与安全性 > 本地网络」允许本 App。"
-        }
-        let description = nsError.localizedDescription
-        if description.contains("App Transport Security") || description.contains("安全连接") {
-            return "iOS 拦截了明文 HTTP（App Transport Security）。请重装本版 App，或把 PUBLIC_RELAY_URL 改为 https。"
-        }
-        return description.isEmpty ? "连接失败" : description
-    }
-
-    private static func isLocalRelayHost(_ origin: String) -> Bool {
-        guard let host = URL(string: origin)?.host?.lowercased(), !host.isEmpty else { return false }
-        if host == "localhost" || host.hasSuffix(".local") || !host.contains(".") { return true }
-        let parts = host.split(separator: ".").compactMap { UInt8($0) }
-        guard parts.count == 4 else { return false }
-        let a = parts[0]
-        let b = parts[1]
-        return a == 10
-            || a == 127
-            || (a == 192 && b == 168)
-            || (a == 172 && (16...31).contains(b))
-            || (a == 100 && (64...127).contains(b))
-            || (a == 169 && b == 254)
-    }
-
-    private func jsonObject(_ text: String) -> [String: Any]? {
-        guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return object
-    }
-
-    private func currentGeneration() -> Int64 {
-        lock.lock()
-        let value = generation
-        lock.unlock()
-        return value
-    }
-
-    private func optionalHello() -> (master: String, clientRandomB64: String, generation: Int64, origin: String)? {
-        pendingHello
-    }
-
     private func registerNetwork() {
-        unregisterNetwork()
-        let monitor = NWPathMonitor()
-        pathMonitor = monitor
-        monitor.pathUpdateHandler = { [weak self] path in
-            guard let self, path.status == .satisfied, !self.stopped else { return }
-            self.lock.lock()
-            let phase = self.state["phase"] as? String ?? ""
-            self.lock.unlock()
-            if phase != "READY" && phase != "CONNECTING" && phase != "HANDSHAKING" {
-                Thread.detachNewThread {
-                    self.lock.lock()
-                    let already = self.connecting
-                    if !already { self.connecting = true }
-                    self.lock.unlock()
-                    if !already { self.connectInternal() }
-                }
-            }
+        let origin = core.current()["relayOrigin"] as? String ?? ""
+        lock.lock(); defer { lock.unlock() }
+        guard monitor == nil else { return }
+        let next = NWPathMonitor()
+        monitor = next
+        next.pathUpdateHandler = { [weak self, weak next] path in
+            guard let self, let next, path.status == .satisfied else { return }
+            self.lock.lock(); let current = self.monitor === next; self.lock.unlock()
+            if current { self.core.networkAvailable() }
         }
-        monitor.start(queue: DispatchQueue(label: "dsh.relay.net"))
+        next.start(queue: DispatchQueue(label: "dsh.relay.network"))
+        DispatchQueue.global(qos: .utility).async { DshLocalNetworkAccess.prepare(for: origin) }
     }
-
     private func unregisterNetwork() {
-        pathMonitor?.cancel()
-        pathMonitor = nil
-    }
-
-    private func publish(
-        phase: String,
-        message: String,
-        localPort: Int? = nil,
-        localToken: String? = nil,
-        hostId: String? = nil,
-        hostName: String? = nil,
-        relayOrigin: String? = nil,
-        paired: Bool? = nil,
-        generation: Int64? = nil
-    ) {
-        lock.lock()
-        var next = state
-        next["phase"] = phase
-        next["message"] = message
-        if let localPort { next["localPort"] = localPort }
-        if let localToken { next["localToken"] = localToken }
-        if let hostId { next["hostId"] = hostId }
-        if let hostName { next["hostName"] = hostName }
-        if let relayOrigin { next["relayOrigin"] = relayOrigin }
-        if let paired { next["paired"] = paired }
-        if let generation { next["generation"] = generation }
-        state = next
-        let blocks = Array(listeners.values)
-        lock.unlock()
-        let snapshot = next as NSDictionary
-        DispatchQueue.main.async {
-            blocks.forEach { $0(snapshot) }
-        }
+        lock.lock(); let old = monitor; monitor = nil; lock.unlock()
+        old?.cancel()
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+private final class DshPairResponse {
+    let signal = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var result: Result<[String: Any], Error>?
+    func complete(_ result: Result<[String: Any], Error>) {
+        lock.lock(); self.result = result; lock.unlock(); signal.signal()
+    }
+    func value() -> Result<[String: Any], Error> { lock.lock(); defer { lock.unlock() }; return result ?? .failure(URLError(.badServerResponse)) }
+}
+
+func dshParseRelayPairQr(_ raw: String) throws -> (origin: String, id: String, master: String) {
+    guard var url = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+          ["http", "https"].contains(url.scheme), let host = url.host, !host.isEmpty,
+          url.user == nil, url.password == nil, url.port.map({ (1...65535).contains($0) }) ?? true else {
+        throw dshRelayError("二维码地址无效")
+    }
+    let fragment = url.percentEncodedFragment ?? ""
+    if let separator = fragment.firstIndex(of: "?") { url.percentEncodedQuery = String(fragment[fragment.index(after: separator)...]) }
+    else if fragment.contains("=") { url.percentEncodedQuery = fragment }
+    let ids = url.queryItems?.filter { $0.name == "id" } ?? []
+    let keys = url.queryItems?.filter { $0.name == "key" } ?? []
+    guard ids.count == 1, keys.count == 1, let id = ids[0].value, let key = keys[0].value,
+          !id.isEmpty, !key.isEmpty else { throw dshRelayError("二维码缺少唯一的配对参数") }
+    if ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host.lowercased()) {
+        throw dshRelayError("二维码指向电脑本机，手机无法访问。请设置 PUBLIC_RELAY_URL 为局域网地址后重新生成二维码。")
+    }
+    url.path = ""; url.query = nil; url.fragment = nil
+    guard let origin = url.string else { throw dshRelayError("二维码地址无效") }
+    return (origin, id, key)
+}
+
+func dshRelayNetworkMessage(_ error: Error) -> String {
+    let error = error as NSError
+    if error.domain == NSURLErrorDomain {
+        switch error.code {
+        case NSURLErrorAppTransportSecurityRequiresSecureConnection:
+            return "iOS 阻止了明文连接，请改用 HTTPS Relay 或检查 App 的网络配置。"
+        case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorCannotConnectToHost,
+             NSURLErrorTimedOut, NSURLErrorDataNotAllowed, NSURLErrorCannotFindHost:
+            return "无法连接 Relay，请检查网络；局域网连接还需在系统设置中允许本 App 访问本地网络。"
+        case NSURLErrorCancelled: return "连接已取消"
+        default: break
+        }
+    }
+    return error.localizedDescription
 }

@@ -31,5 +31,3 @@ dependencyResolutionManagement {
 rootProject.name = "DSH"
 include(":androidApp")
 include(":shared")
-include(":h5App")
-include(":miniApp")

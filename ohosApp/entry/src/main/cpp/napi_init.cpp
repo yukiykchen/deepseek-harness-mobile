@@ -2,7 +2,6 @@
 #include "libshared_api.h"
 #include "dsh_kuikly_log.h"
 #include <atomic>
-#include <cstdlib>
 #include <hilog/log.h>
 #include <string>
 #include <vector>
@@ -23,8 +22,8 @@ static std::string NapiToUtf8(napi_env env, napi_value value) {
 
 static void DshKuiklyLogAdapter(int logLevel, const char *tag, const char *message) {
     (void)logLevel;
-    OH_LOG_Print(LOG_APP, LOG_INFO, DSH_LOG_DOMAIN, tag != nullptr ? tag : "KLog", "%{public}s",
-                 message != nullptr ? message : "");
+    (void)tag;
+    (void)message;
 }
 
 static void CallJsOnMain(napi_env env, napi_value jsCallback, void *context, void *data) {
@@ -99,76 +98,15 @@ static napi_value InitKuikly(napi_env env, napi_callback_info info) {
     }
     auto api = libshared_symbols();
     int handler = api->kotlin.root.initKuikly();
-    dsh_http_init();
     napi_value result;
     napi_create_int32(env, handler, &result);
     return result;
-}
-
-struct HttpPostWork {
-    napi_async_work work = nullptr;
-    napi_deferred deferred = nullptr;
-    std::string url;
-    std::string body;
-    std::string token;
-    std::string result;
-};
-
-static void ExecuteHttpPost(napi_env env, void *data) {
-    (void)env;
-    auto *work = static_cast<HttpPostWork *>(data);
-    void *rawPtr = dsh_http_post_json(const_cast<char *>(work->url.c_str()), const_cast<char *>(work->body.c_str()),
-                                      const_cast<char *>(work->token.c_str()));
-    char *raw = static_cast<char *>(rawPtr);
-    if (raw == nullptr) {
-        work->result = "-1\nnetworkkmm returned null\n0\n";
-        return;
-    }
-    work->result = raw;
-    free(raw);
-}
-
-static void CompleteHttpPost(napi_env env, napi_status status, void *data) {
-    auto *work = static_cast<HttpPostWork *>(data);
-    napi_value result;
-    napi_create_string_utf8(env, work->result.c_str(), NAPI_AUTO_LENGTH, &result);
-    if (status == napi_ok) {
-        napi_resolve_deferred(env, work->deferred, result);
-    } else {
-        napi_reject_deferred(env, work->deferred, result);
-    }
-    napi_delete_async_work(env, work->work);
-    delete work;
-}
-
-static napi_value DshHttpPostJson(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3] = {nullptr, nullptr, nullptr};
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    auto *work = new HttpPostWork();
-    if (argc > 0 && args[0] != nullptr) {
-        work->url = NapiToUtf8(env, args[0]);
-    }
-    if (argc > 1 && args[1] != nullptr) {
-        work->body = NapiToUtf8(env, args[1]);
-    }
-    if (argc > 2 && args[2] != nullptr) {
-        work->token = NapiToUtf8(env, args[2]);
-    }
-    napi_value promise;
-    napi_create_promise(env, &work->deferred, &promise);
-    napi_value resourceName;
-    napi_create_string_utf8(env, "dshHttpPostJson", NAPI_AUTO_LENGTH, &resourceName);
-    napi_create_async_work(env, nullptr, resourceName, ExecuteHttpPost, CompleteHttpPost, work, &work->work);
-    napi_queue_async_work(env, work->work);
-    return promise;
 }
 
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
         {"initKuikly", nullptr, InitKuikly, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"dshHttpPostJson", nullptr, DshHttpPostJson, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setMainHandler", nullptr, SetMainHandler, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"postToMain", nullptr, PostToMain, nullptr, nullptr, nullptr, napi_default, nullptr},
     };

@@ -10,7 +10,7 @@ target 'iosApp' do
   pod 'SDWebImage'
   # Kuikly iOS 不内置 SVG；UIImage / SDWebImage 都解不了。官方示例用 SVGKit 3.x。
   pod 'SVGKit', :git => 'https://github.com/troZee/SVGKit.git', :branch => '3.x'
-  pod 'NMSSH', '2.3.1'
+  pod 'DshLibssh2', :podspec => 'Podspecs/DshLibssh2.podspec'
 end
 
 post_install do |installer|

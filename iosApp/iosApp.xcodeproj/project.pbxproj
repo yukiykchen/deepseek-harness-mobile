@@ -30,6 +30,13 @@
 		D5A1101A29A2A174009349F1 /* DshSshKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101929A2A173009349F1 /* DshSshKeyStore.swift */; };
 		D5A1101C29A2A174009349F1 /* DshNativeUi.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101B29A2A173009349F1 /* DshNativeUi.swift */; };
 		D5A1101D29A2A174009349F1 /* DshLocalNetworkAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1101E29A2A173009349F1 /* DshLocalNetworkAccess.swift */; };
+		D5A1200129A2A174009349F1 /* DshRelayCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1200229A2A173009349F1; };
+		D5A1200329A2A174009349F1 /* DshRelayTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1200429A2A173009349F1; };
+		D5A1200529A2A174009349F1 /* DshRelaySocketIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1200629A2A173009349F1; };
+		D5A1300129A2A174009349F1 /* DshSshSession.m in Sources */ = {isa = PBXBuildFile; fileRef = D5A1300229A2A173009349F1; };
+		D5A1300329A2A174009349F1 /* DshSshForwarder.m in Sources */ = {isa = PBXBuildFile; fileRef = D5A1300429A2A173009349F1; };
+		D5A1300729A2A174009349F1 /* DshSshKeyRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A1300829A2A173009349F1; };
+		D5A1300929A2A174009349F1 /* DshSshKeyValidator.m in Sources */ = {isa = PBXBuildFile; fileRef = D5A1300A29A2A173009349F1; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -70,6 +77,15 @@
 		D5A1101929A2A173009349F1 /* DshSshKeyStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DshSshKeyStore.swift; sourceTree = "<group>"; };
 		D5A1101B29A2A173009349F1 /* DshNativeUi.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DshNativeUi.swift; sourceTree = "<group>"; };
 		D5A1101E29A2A173009349F1 /* DshLocalNetworkAccess.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = DshLocalNetworkAccess.swift; sourceTree = "<group>"; };
+		D5A1200229A2A173009349F1 /* DshRelayCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshRelayCore.swift; sourceTree = "<group>"; };
+		D5A1200429A2A173009349F1 /* DshRelayTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshRelayTransport.swift; sourceTree = "<group>"; };
+		D5A1200629A2A173009349F1 /* DshRelaySocketIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshRelaySocketIO.swift; sourceTree = "<group>"; };
+		D5A1300229A2A173009349F1 /* DshSshSession.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DshSshSession.m; sourceTree = "<group>"; };
+		D5A1300429A2A173009349F1 /* DshSshForwarder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DshSshForwarder.m; sourceTree = "<group>"; };
+		D5A1300529A2A173009349F1 /* DshSshSession.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DshSshSession.h; sourceTree = "<group>"; };
+		D5A1300629A2A173009349F1 /* DshSshSessionInternal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DshSshSessionInternal.h; sourceTree = "<group>"; };
+		D5A1300829A2A173009349F1 /* DshSshKeyRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshSshKeyRecords.swift; sourceTree = "<group>"; };
+		D5A1300A29A2A173009349F1 /* DshSshKeyValidator.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DshSshKeyValidator.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -194,11 +210,20 @@
 				D5A1101129A2A173009349F1 /* DshRelaySecrets.swift */,
 				D5A1101329A2A173009349F1 /* DshRelayLoopback.swift */,
 				D5A1101529A2A173009349F1 /* DshRelayRuntime.swift */,
+				D5A1200229A2A173009349F1 /* DshRelayCore.swift */,
+				D5A1200429A2A173009349F1 /* DshRelayTransport.swift */,
+				D5A1200629A2A173009349F1 /* DshRelaySocketIO.swift */,
 				D5A1101E29A2A173009349F1 /* DshLocalNetworkAccess.swift */,
 				D5A1101729A2A173009349F1 /* DshQrScanViewController.swift */,
 				D5A1101929A2A173009349F1 /* DshSshKeyStore.swift */,
 				D5A1101B29A2A173009349F1 /* DshNativeUi.swift */,
 				D5A1100629A2A173009349F1 /* DshSshTunnel.m */,
+				D5A1300229A2A173009349F1 /* DshSshSession.m */,
+				D5A1300429A2A173009349F1 /* DshSshForwarder.m */,
+				D5A1300529A2A173009349F1 /* DshSshSession.h */,
+				D5A1300629A2A173009349F1 /* DshSshSessionInternal.h */,
+				D5A1300829A2A173009349F1 /* DshSshKeyRecords.swift */,
+				D5A1300A29A2A173009349F1 /* DshSshKeyValidator.m */,
 				D5A1100829A2A173009349F1 /* DshSshTunnel.h */,
 			);
 			path = Native;
@@ -356,10 +381,17 @@
 				D5A1100129A2A174009349F1 /* DshRelayModule.m in Sources */,
 				D5A1100429A2A174009349F1 /* DshEngineModule.m in Sources */,
 				D5A1100729A2A174009349F1 /* DshSshTunnel.m in Sources */,
+				D5A1300129A2A174009349F1 /* DshSshSession.m in Sources */,
+				D5A1300329A2A174009349F1 /* DshSshForwarder.m in Sources */,
+				D5A1300729A2A174009349F1 /* DshSshKeyRecords.swift in Sources */,
+				D5A1300929A2A174009349F1 /* DshSshKeyValidator.m in Sources */,
 				D5A1101029A2A174009349F1 /* DshSealedTunnelCrypto.swift in Sources */,
 				D5A1101229A2A174009349F1 /* DshRelaySecrets.swift in Sources */,
 				D5A1101429A2A174009349F1 /* DshRelayLoopback.swift in Sources */,
 				D5A1101629A2A174009349F1 /* DshRelayRuntime.swift in Sources */,
+				D5A1200129A2A174009349F1 /* DshRelayCore.swift in Sources */,
+				D5A1200329A2A174009349F1 /* DshRelayTransport.swift in Sources */,
+				D5A1200529A2A174009349F1 /* DshRelaySocketIO.swift in Sources */,
 				D5A1101D29A2A174009349F1 /* DshLocalNetworkAccess.swift in Sources */,
 				D5A1101829A2A174009349F1 /* DshQrScanViewController.swift in Sources */,
 				D5A1101A29A2A174009349F1 /* DshSshKeyStore.swift in Sources */,
@@ -503,7 +535,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = orgIdentifier.iosApp.dsh;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.yukiykchen.dsh;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "iosApp-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
@@ -526,7 +558,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = orgIdentifier.iosApp.dsh;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.yukiykchen.dsh;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "iosApp-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;

@@ -1,140 +1,157 @@
-import fs from '@ohos.file.fs';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { toArrayBuffer, utf8Decode, utf8Encode } from './DshBytes';
-import { aesGcmDecrypt, aesGcmEncrypt } from './DshSealedTunnelCrypto';
-import { DshOhosContext, dshError, pathExists } from './DshOhosContext';
+import url from '@ohos.url';
+import { decodeBase64Url, utf8Decode, utf8Encode } from './DshBytes';
+import { DshHuksSecretCipher } from './DshHuksSecretCipher';
+import { DshRelaySecretFiles, packSecret, PROTECTED_PAIRING_FILE, unpackSecret } from './DshRelaySecretFiles';
+import { aesGcmDecrypt } from './DshSealedTunnelCrypto';
 
-const TAG_BYTES = 16;
+// All store instances share cancellation and ordering, including legacy migration.
+let version = 0;
+let tail: Promise<void> = Promise.resolve();
+
+export class DshRelayCredentials {
+  masterKey: string;
+  clientToken: string;
+  hostId: string;
+  hostName: string;
+  origin: string;
+  constructor(
+    masterKey: string, clientToken: string, hostId: string, hostName: string, origin: string,
+  ) {
+    this.masterKey = masterKey;
+    this.clientToken = clientToken;
+    this.hostId = hostId;
+    this.hostName = hostName;
+    this.origin = origin;
+  }
+}
 
 export class DshRelaySecrets {
-  private readonly root: string;
+  private readonly files: DshRelaySecretFiles = new DshRelaySecretFiles();
+  private readonly cipher: DshHuksSecretCipher = new DshHuksSecretCipher();
 
-  constructor() {
-    this.root = `${DshOhosContext.filesDir()}/relay-secrets`;
-    if (!pathExists(this.root)) {
-      fs.mkdirSync(this.root, true);
-    }
+  save(master: string, token: string, host: string, name: string, origin: string,
+    current: () => boolean = () => true): Promise<void> {
+    const credentials = new DshRelayCredentials(master, token, host, name, origin);
+    validate(credentials);
+    const expected = ++version;
+    const valid = (): boolean => expected === version && current();
+    const pending = tail.then(async () => {
+      assertCurrent(valid);
+      await this.persist(credentials, valid);
+    });
+    tail = pending.catch(() => {});
+    return pending;
   }
 
-  async save(
-    masterKeyB64: string,
-    clientToken: string,
-    hostId: string,
-    hostName: string,
-    relayOrigin: string,
-  ): Promise<void> {
-    await this.write('master.bin', utf8Encode(masterKeyB64));
-    await this.write('client.bin', utf8Encode(clientToken));
-    await this.write('host.bin', utf8Encode(hostId));
-    await this.write('name.bin', utf8Encode(hostName));
-    await this.write('origin.bin', utf8Encode(relayOrigin));
+  load(): Promise<DshRelayCredentials | null> {
+    const expected = version;
+    const valid = (): boolean => expected === version;
+    const pending = tail.then(async (): Promise<DshRelayCredentials | null> => {
+      assertCurrent(valid);
+      const protectedRecord = this.files.read(PROTECTED_PAIRING_FILE);
+      if (protectedRecord) {
+        const parts = unpackSecret(protectedRecord);
+        const plaintext = await this.cipher.open(parts[0], parts[1]);
+        try {
+          assertCurrent(valid);
+          const credentials = parseCredentials(utf8Decode(plaintext));
+          this.files.removeLegacy();
+          return credentials;
+        } finally { plaintext.fill(0); }
+      }
+      const credentials = await this.loadLegacy(valid);
+      assertCurrent(valid);
+      if (credentials) await this.persist(credentials, valid);
+      return credentials;
+    });
+    tail = pending.then(() => {}, () => {});
+    return pending;
   }
 
-  async masterKey(): Promise<string> {
-    return await this.readString('master.bin');
-  }
-
-  async clientToken(): Promise<string> {
-    return await this.readString('client.bin');
-  }
-
-  async hostId(): Promise<string> {
-    return await this.readString('host.bin');
-  }
-
-  async hostName(): Promise<string> {
-    return await this.readString('name.bin');
-  }
-
-  async relayOrigin(): Promise<string> {
-    return await this.readString('origin.bin');
-  }
-
-  async hasPairing(): Promise<boolean> {
-    const master = await this.masterKey();
-    const token = await this.clientToken();
-    return master.length > 0 && token.length > 0;
-  }
+  async masterKey(): Promise<string> { return (await this.load())?.masterKey ?? ''; }
+  async clientToken(): Promise<string> { return (await this.load())?.clientToken ?? ''; }
+  async hostId(): Promise<string> { return (await this.load())?.hostId ?? ''; }
+  async hostName(): Promise<string> { return (await this.load())?.hostName ?? ''; }
+  async relayOrigin(): Promise<string> { return (await this.load())?.origin ?? ''; }
+  async hasPairing(): Promise<boolean> { return await this.load() !== null; }
 
   clear(): void {
-    const names = ['master.bin', 'client.bin', 'host.bin', 'name.bin', 'origin.bin'];
-    for (let i = 0; i < names.length; i++) {
-      const path = `${this.root}/${names[i]}`;
-      try {
-        if (pathExists(path)) {
-          fs.unlinkSync(path);
-        }
-      } catch (error) {
-        dshError(`clear ${names[i]} failed`, error as Object);
-      }
-    }
+    version++;
+    this.files.clear();
+    // Keep the non-exportable HUKS alias so asynchronous key deletion cannot race a new save.
   }
 
-  private async readString(name: string): Promise<string> {
-    const bytes = await this.read(name);
-    return bytes ? utf8Decode(bytes) : '';
-  }
-
-  private async write(name: string, bytes: Uint8Array): Promise<void> {
-    const key = await this.secretKeyBytes();
-    const iv = cryptoFramework.createRandom().generateRandomSync(12).data;
-    const sealed = await aesGcmEncrypt(key, iv, new Uint8Array(0), bytes);
-    const packed = new Uint8Array(1 + iv.length + sealed.length);
-    packed[0] = iv.length;
-    packed.set(iv, 1);
-    packed.set(sealed, 1 + iv.length);
-    const file = fs.openSync(`${this.root}/${name}`, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+  private async persist(credentials: DshRelayCredentials, current: () => boolean): Promise<void> {
+    const plaintext = utf8Encode(JSON.stringify(credentials));
     try {
-      fs.writeSync(file.fd, toArrayBuffer(packed));
-    } finally {
-      fs.closeSync(file);
-    }
+      const iv = cryptoFramework.createRandom().generateRandomSync(12).data;
+      const sealed = await this.cipher.seal(iv, plaintext);
+      assertCurrent(current);
+      this.files.commit(packSecret(iv, sealed), current);
+      this.files.removeLegacy();
+    } finally { plaintext.fill(0); }
   }
 
-  private async read(name: string): Promise<Uint8Array | null> {
-    const path = `${this.root}/${name}`;
-    if (!pathExists(path)) {
-      return null;
-    }
-    const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+  private async loadLegacy(current: () => boolean): Promise<DshRelayCredentials | null> {
+    const record = this.files.read('pairing.bin');
+    const master = record ? null : this.files.read('master.bin');
+    if (!record && !master) return null;
+    const key = this.files.read('kek.bin');
+    if (!key) throw new Error('Legacy pairing key unavailable');
     try {
-      const stat = fs.statSync(file.fd);
-      const buffer = new ArrayBuffer(stat.size);
-      fs.readSync(file.fd, buffer);
-      const packed = new Uint8Array(buffer);
-      const ivLength = packed[0];
-      if (ivLength < 12 || ivLength > 32 || packed.length < 1 + ivLength + TAG_BYTES) {
-        throw new Error('invalid encrypted secret');
-      }
-      const iv = packed.subarray(1, 1 + ivLength);
-      const rest = packed.subarray(1 + ivLength);
-      const key = await this.secretKeyBytes();
-      return await aesGcmDecrypt(key, iv, new Uint8Array(0), rest);
-    } finally {
-      fs.closeSync(file);
-    }
+      if (key.length !== 32) throw new Error('Invalid legacy pairing key');
+      if (record) return parseCredentials(await this.decryptLegacy(record, key, current));
+      const masterText = await this.decryptLegacy(master!, key, current);
+      const token = await this.readLegacyField('client.bin', key, current);
+      const host = await this.readLegacyField('host.bin', key, current);
+      const name = await this.readLegacyField('name.bin', key, current);
+      const origin = await this.readLegacyField('origin.bin', key, current);
+      const credentials = new DshRelayCredentials(masterText, token, host, name, origin);
+      validate(credentials);
+      return credentials;
+    } finally { key.fill(0); }
   }
 
-  private async secretKeyBytes(): Promise<Uint8Array> {
-    const path = `${this.root}/kek.bin`;
-    if (pathExists(path)) {
-      const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
-      try {
-        const stat = fs.statSync(file.fd);
-        const buffer = new ArrayBuffer(stat.size);
-        fs.readSync(file.fd, buffer);
-        return new Uint8Array(buffer);
-      } finally {
-        fs.closeSync(file);
-      }
-    }
-    const raw = cryptoFramework.createRandom().generateRandomSync(32).data;
-    const file = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
-    try {
-      fs.writeSync(file.fd, toArrayBuffer(raw));
-    } finally {
-      fs.closeSync(file);
-    }
-    return raw;
+  private async readLegacyField(name: string, key: Uint8Array, current: () => boolean): Promise<string> {
+    const packed = this.files.read(name);
+    if (!packed) throw new Error('Incomplete legacy pairing');
+    return this.decryptLegacy(packed, key, current);
   }
+
+  private async decryptLegacy(packed: Uint8Array, key: Uint8Array, current: () => boolean): Promise<string> {
+    const parts = unpackSecret(packed);
+    const plaintext = await aesGcmDecrypt(key, parts[0], new Uint8Array(0), parts[1]);
+    try { assertCurrent(current); return utf8Decode(plaintext); } finally { plaintext.fill(0); }
+  }
+}
+
+function assertCurrent(current: () => boolean): void {
+  if (!current()) throw new Error('Pairing save cancelled');
+}
+
+function parseCredentials(text: string): DshRelayCredentials {
+  const record = JSON.parse(text) as Record<string, Object>;
+  if (record === null || typeof record !== 'object') throw new Error('Invalid pairing record');
+  const fields = ['masterKey', 'clientToken', 'hostId', 'hostName', 'origin'];
+  for (const field of fields) {
+    if (typeof record[field] !== 'string') throw new Error('Invalid pairing record');
+  }
+  const credentials = new DshRelayCredentials(record['masterKey'] as string, record['clientToken'] as string,
+    record['hostId'] as string, record['hostName'] as string, record['origin'] as string);
+  validate(credentials);
+  return credentials;
+}
+
+function validate(credentials: DshRelayCredentials): void {
+  const decoded = decodeBase64Url(credentials.masterKey, 32);
+  decoded.fill(0);
+  if (!/^[\x21-\x7e]+$/.test(credentials.clientToken) || !credentials.hostId.trim()) {
+    throw new Error('Invalid pairing credentials');
+  }
+  const parsed = new url.URL(credentials.origin);
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname || parsed.username || parsed.password) {
+    throw new Error('Invalid relay origin');
+  }
+  if (utf8Encode(JSON.stringify(credentials)).length > 60 * 1024) throw new Error('Pairing credentials too large');
 }

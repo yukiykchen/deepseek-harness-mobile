@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "com.example.dsh",
+    "bundleName": "io.github.yukiykchen.dsh",
     "vendor": "example",
     "versionCode": 1000000,
     "versionName": "1.0.0",

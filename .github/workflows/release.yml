@@ -41,7 +41,16 @@ jobs:
           fi
 
       - name: Build release APK
-        run: ./gradlew :androidApp:assembleRelease --no-daemon --stacktrace
+        env:
+          DSH_RELEASE_KEYSTORE: ${{ runner.temp }}/release.jks
+          DSH_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.DSH_RELEASE_KEYSTORE_PASSWORD }}
+          DSH_RELEASE_KEY_ALIAS: ${{ secrets.DSH_RELEASE_KEY_ALIAS }}
+          DSH_RELEASE_KEY_PASSWORD: ${{ secrets.DSH_RELEASE_KEY_PASSWORD }}
+        run: |
+          test -n "$DSH_RELEASE_KEYSTORE_PASSWORD"
+          printf '%s' '${{ secrets.DSH_RELEASE_KEYSTORE_BASE64 }}' | base64 --decode > "$DSH_RELEASE_KEYSTORE"
+          ./gradlew verifySharedArchitecture :shared:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:assembleRelease --no-daemon --stacktrace
+          rm -f "$DSH_RELEASE_KEYSTORE"
 
       - name: Package artifacts
         id: pack
@@ -50,6 +59,7 @@ jobs:
           mkdir -p dist
           apk="$(find androidApp/build/outputs/apk/release -name '*.apk' | head -1)"
           test -n "$apk"
+          bash scripts/verify-release-apk.sh "$apk"
           cp "$apk" "dist/dsh-mobile-${version}.apk"
           (cd dist && sha256sum "dsh-mobile-${version}.apk" > SHA256SUMS)
           echo "apk=dist/dsh-mobile-${version}.apk" >> "$GITHUB_OUTPUT"

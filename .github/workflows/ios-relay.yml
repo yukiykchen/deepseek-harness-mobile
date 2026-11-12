@@ -1,0 +1,57 @@
+name: iOS Native Regression
+
+on:
+  pull_request:
+    paths:
+      - "iosApp/**"
+      - "shared/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle/**"
+      - "scripts/swift/**"
+      - "scripts/objc/**"
+      - "scripts/test-ios-ssh.py"
+      - "scripts/requirements-ssh-tests.txt"
+      - "scripts/test-ios-relay.py"
+      - "androidApp/src/test/resources/sealed-tunnel-v1.json"
+      - ".github/workflows/ios-relay.yml"
+  push:
+    branches: [main]
+    paths:
+      - "iosApp/**"
+      - "shared/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle/**"
+      - "scripts/swift/**"
+      - "scripts/objc/**"
+      - "scripts/test-ios-ssh.py"
+      - "scripts/requirements-ssh-tests.txt"
+      - "scripts/test-ios-relay.py"
+      - "androidApp/src/test/resources/sealed-tunnel-v1.json"
+      - ".github/workflows/ios-relay.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Native Relay And Run Regression Tests
+        run: python3 scripts/test-ios-relay.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install SSH Test Dependencies
+        run: |
+          cd iosApp && pod install --deployment && cd ..
+          python3 -m pip install -r scripts/requirements-ssh-tests.txt
+      - name: Compile Native SSH And Run Regression Tests
+        env:
+          SSH_ADDRESS_SANITIZER: "1"
+        run: python3 scripts/test-ios-ssh.py
+      - name: Build Unsigned iOS App
+        run: xcodebuild -workspace iosApp/iosApp.xcworkspace -scheme iosApp -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build

@@ -1,459 +1,218 @@
-import CommonCrypto
+import CryptoKit
 import Darwin
 import Foundation
 
-final class DshRelayLoopbackServer {
+final class DshRelayLoopbackServer: DshRelayGateway {
+    private final class WebSocketPeer {
+        let socket: DshLocalSocket
+        let lock = NSLock()
+        var upgraded = false
+        var pending: [Data] = []
+        var pendingBytes = 0
+        init(_ socket: DshLocalSocket) { self.socket = socket }
+        func write(_ data: Data) {
+            lock.lock(); defer { lock.unlock() }
+            if upgraded { socket.write(data) }
+            else if pending.count < 64 && data.count <= DshWsFrame.maxBytes - pendingBytes {
+                pending.append(data); pendingBytes += data.count
+            } else { socket.stop() }
+        }
+    }
+    private let lock = NSLock()
     private let token: String
     private let sendInner: (String, [String: Any], String) -> Void
-    private let httpLimit = DshAtomicInt()
-    private let wsLimit = DshAtomicInt()
-    private var httpWaiters: [String: DshWaiter] = [:]
-    private let waiterLock = NSLock()
-    private var sockets: [String: Int32] = [:]
-    private let socketsLock = NSLock()
-    private var listenFd: Int32 = -1
-    private(set) var port: Int = 0
-    private var stopped = false
-    private var acceptThread: Thread?
-
-    init(token: String, sendInner: @escaping (String, [String: Any], String) -> Void) {
-        self.token = token
-        self.sendInner = sendInner
+    private let responseTimeout: TimeInterval
+    private var listener: DshLocalSocket?
+    private var peers: [UUID: DshLocalSocket] = [:]
+    private var waiters: [String: DshRelayWaiter] = [:]
+    private var waiterSockets: [String: DshLocalSocket] = [:]
+    private var webSockets: [String: WebSocketPeer] = [:]
+    private var httpCount = 0
+    private var wsCount = 0
+    private var ended = false
+    private var boundPort = 0
+    var port: Int { locked { boundPort } }
+    var activePeerCount: Int { locked { peers.count } }
+    init(token: String, responseTimeout: TimeInterval = 120, sendInner: @escaping (String, [String: Any], String) -> Void) {
+        self.token = token; self.sendInner = sendInner; self.responseTimeout = responseTimeout
     }
-
-    func start() throws -> Int {
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
-        addr.sin_port = 0
-        listenFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
-        guard listenFd >= 0 else { throw DshLoopbackError.bindFailed }
-        var reuse: Int32 = 1
-        setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-        let bindResult = withUnsafePointer(to: &addr) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(listenFd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bindResult == 0, Darwin.listen(listenFd, 32) == 0 else {
-            Darwin.close(listenFd)
-            listenFd = -1
-            throw DshLoopbackError.bindFailed
-        }
-        var bound = sockaddr_in()
-        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-        _ = withUnsafeMutablePointer(to: &bound) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getsockname(listenFd, $0, &len)
-            }
-        }
-        port = Int(UInt16(bigEndian: bound.sin_port))
-        let thread = Thread { [weak self] in self?.acceptLoop() }
-        thread.name = "dsh-relay-loopback"
-        acceptThread = thread
-        thread.start()
-        return port
-    }
-
-    func isListening() -> Bool {
-        !stopped && listenFd >= 0 && port > 0
-    }
-
+    func start() throws -> Int { try locked {
+        guard !ended && listener == nil else { throw dshRelayError("Loopback already started or stopped") }
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+        guard fd >= 0 else { throw dshRelayError("Loopback socket failed") }
+        let socket = DshLocalSocket(fd)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        } }
+        guard result == 0, Darwin.listen(fd, 32) == 0 else { throw dshRelayError("Loopback bind failed") }
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &size) } }
+        guard named == 0 else { throw dshRelayError("Loopback address failed") }
+        boundPort = Int(UInt16(bigEndian: address.sin_port)); listener = socket
+        Thread.detachNewThread { [weak self] in self?.accept(socket) }
+        return boundPort
+    } }
+    func isListening() -> Bool { locked { !ended && listener != nil && boundPort > 0 } }
     func stop() {
-        stopped = true
-        if listenFd >= 0 {
-            Darwin.close(listenFd)
-            listenFd = -1
+        let resources: (DshLocalSocket?, [DshLocalSocket], [DshRelayWaiter]) = locked {
+            ended = true; boundPort = 0
+            let resources = (listener, Array(peers.values), Array(waiters.values))
+            listener = nil; waiters.removeAll(); waiterSockets.removeAll(); webSockets.removeAll()
+            return resources
         }
-        socketsLock.lock()
-        sockets.values.forEach { Darwin.close($0) }
-        sockets.removeAll()
-        socketsLock.unlock()
-        waiterLock.lock()
-        httpWaiters.removeAll()
-        waiterLock.unlock()
+        resources.0?.stop(); resources.1.forEach { $0.stop() }; resources.2.forEach { $0.close() }
     }
-
     func onInner(type: String, payload: [String: Any], channel: String) {
+        let targets = locked { (ended, waiters[channel], webSockets[channel], waiterSockets[channel]) }
+        guard !targets.0 else { return }
         switch type {
-        case "http_res":
-            waiter(channel)?.offer(payload)
+        case "http_res": if targets.1?.offer(payload) == false { targets.3?.stop(); targets.1?.close() }
         case "ws_open_ok":
-            waiter(channel)?.offer(["ok": true])
-        case "ws_frame":
-            writeWsFrame(channel: channel, payload: payload)
+            if let waiter = targets.1 {
+                if !waiter.offer(["ok": true]) { targets.3?.stop(); waiter.close() }
+            } else { sendInner("ws_close", ["code": 1001, "reason": "gateway closed"], channel) }
         case "ws_close":
-            if let waiter = waiter(channel) {
-                let reason = (payload["reason"] as? String)?.nilIfEmpty ?? "host websocket closed"
-                waiter.offer(["ok": false, "reason": reason])
-            } else {
-                socketsLock.lock()
-                if let fd = sockets.removeValue(forKey: channel) {
-                    Darwin.close(fd)
-                }
-                socketsLock.unlock()
-            }
-        default:
-            break
+            _ = targets.1?.offer(["ok": false, "reason": payload["reason"] ?? "host WebSocket closed"])
+            targets.2?.socket.stop()
+        case "ws_frame":
+            guard let peer = targets.2, let text = payload["dataB64"] as? String,
+                  let bytes = Data(base64Encoded: text), bytes.count <= DshWsFrame.maxBytes else { return }
+            peer.write(DshWsFrame.encode((payload["opcode"] as? Int) == 2 ? 2 : 1, bytes))
+        default: break
         }
     }
-
-    private func acceptLoop() {
-        while !stopped {
-            var addr = sockaddr_in()
-            var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-            let client = withUnsafeMutablePointer(to: &addr) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.accept(listenFd, $0, &len)
-                }
+    private func accept(_ listener: DshLocalSocket) {
+        while !listener.closed {
+            let fd = Darwin.accept(listener.fd, nil, nil)
+            if fd < 0 { if errno == EINTR { continue }; break }
+            let socket = DshLocalSocket(fd), id = UUID()
+            let registered = locked { () -> Bool in
+                guard !ended && peers.count < 64 else { return false }
+                peers[id] = socket; return true
             }
-            if client < 0 {
-                if stopped { return }
-                continue
-            }
+            guard registered else { socket.stop(); continue }
             Thread.detachNewThread { [weak self] in
-                self?.handle(client)
+                guard let self else { socket.stop(); return }
+                defer { socket.stop(); self.locked { _ = self.peers.removeValue(forKey: id) } }
+                self.handle(socket)
             }
         }
     }
-
-    private func handle(_ fd: Int32) {
-        defer { Darwin.close(fd) }
-        var timeout = timeval(tv_sec: 120, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        guard let headerBytes = readHeaders(fd) else { return }
-        let text = String(bytes: headerBytes, encoding: .isoLatin1) ?? ""
-        let lines = text.components(separatedBy: "\r\n")
-        let request = lines.first?.split(separator: " ", omittingEmptySubsequences: false).map(String.init) ?? []
-        guard request.count >= 2 else { return }
-        let method = request[0]
-        let path = request[1]
+    private func handle(_ socket: DshLocalSocket) {
+        socket.timeout(10)
+        guard let header = socket.readHeaders() else { return }
+        let lines = header.components(separatedBy: "\r\n")
+        let request = lines[0].split(separator: " ").map(String.init)
+        guard request.count == 3, request[1].hasPrefix("/"), ["HTTP/1.0", "HTTP/1.1"].contains(request[2]) else {
+            http(socket, 400, "invalid request"); return
+        }
         var headers: [String: String] = [:]
-        for line in lines.dropFirst() {
-            guard let idx = line.firstIndex(of: ":") else { continue }
-            let name = line[..<idx].trimmingCharacters(in: .whitespaces).lowercased()
-            let value = line[line.index(after: idx)...].trimmingCharacters(in: .whitespaces)
+        for line in lines.dropFirst() where !line.isEmpty {
+            guard let separator = line.firstIndex(of: ":") else { http(socket, 400, "invalid header"); return }
+            let name = line[..<separator].trimmingCharacters(in: .whitespaces).lowercased()
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespaces)
+            guard validHeader(name, value), headers[name] == nil else { http(socket, 400, "invalid header"); return }
             headers[name] = value
         }
-        if headers["authorization"] != "Bearer \(token)" {
-            writeHttp(fd, status: 401, body: "unauthorized")
-            return
+        guard headers["authorization"] == "Bearer \(token)" else { http(socket, 401, "unauthorized"); return }
+        if headers["upgrade"]?.lowercased() == "websocket" { upgrade(socket, request[1], headers); return }
+        guard let length = Int(headers["content-length"] ?? "0"), length >= 0, headers["transfer-encoding"] == nil else {
+            http(socket, 400, "unsupported body"); return
         }
-        if headers["upgrade"]?.lowercased() == "websocket" {
-            acceptWebSocket(fd, path: path, headers: headers)
-            return
-        }
-        let length = Int(headers["content-length"] ?? "0") ?? 0
-        if length > 2 * 1024 * 1024 {
-            writeHttp(fd, status: 413, body: "request too large")
-            return
-        }
-        let body = length > 0 ? (readExact(fd, length) ?? Data()) : Data()
-        proxyHttp(fd, method: method, path: path, headers: headers, body: body)
+        guard length <= 2 * 1024 * 1024 else { http(socket, 413, "request too large"); return }
+        guard let body = socket.readExact(length) else { return }
+        proxyHttp(socket, request[0], request[1], headers, body)
     }
-
-    private func proxyHttp(_ fd: Int32, method: String, path: String, headers: [String: String], body: Data) {
-        if httpLimit.increment() > 32 {
-            httpLimit.decrement()
-            writeHttp(fd, status: 429, body: "too many tunnels")
-            return
+    private func proxyHttp(_ socket: DshLocalSocket, _ method: String, _ path: String, _ headers: [String: String], _ body: Data) {
+        let channel = "http-\(UUID().uuidString)", waiter = DshRelayWaiter()
+        let accepted = locked { () -> Bool in
+            guard !ended && httpCount < 32 else { return false }
+            httpCount += 1; waiters[channel] = waiter; waiterSockets[channel] = socket; return true
         }
-        defer { httpLimit.decrement() }
-        let channel = "http-\(UUID().uuidString)"
-        let queue = DshWaiter()
-        setWaiter(channel, queue)
-        defer { removeWaiter(channel) }
-        var forwarded: [String: Any] = [:]
-        for (key, value) in headers where key != "authorization" && key != "host" && key != "content-length" {
-            forwarded[key] = value
-        }
-        sendInner(
-            "http_req",
-            [
-                "method": method,
-                "path": path,
-                "headers": forwarded,
-                "bodyB64": body.base64EncodedString(),
-            ],
-            channel
-        )
-        var headerWritten = false
-        while true {
-            guard let part = queue.poll(timeout: 120) else { break }
-            if !headerWritten {
-                let status = intValue(part["status"], fallback: 200)
-                writeRaw(fd, "HTTP/1.1 \(status) OK\r\n")
-                writeRaw(fd, "Transfer-Encoding: chunked\r\nConnection: close\r\n")
-                if let responseHeaders = part["headers"] as? [String: Any] {
-                    for (name, value) in responseHeaders {
-                        if name.lowercased() == "content-length" || name.lowercased() == "transfer-encoding" {
-                            continue
-                        }
-                        writeRaw(fd, "\(name): \(value)\r\n")
-                    }
-                }
-                writeRaw(fd, "\r\n")
-                headerWritten = true
+        guard accepted else { http(socket, 429, "too many requests"); return }
+        defer { waiter.close(); locked { waiters.removeValue(forKey: channel); waiterSockets.removeValue(forKey: channel); httpCount -= 1 } }
+        sendInner("http_req", ["method": method, "path": path, "headers": forwarded(headers), "bodyB64": body.base64EncodedString()], channel)
+        var headersSent = false
+        while !socket.closed {
+            guard let value = waiter.poll(responseTimeout) else { if !socket.closed && !headersSent { http(socket, 504, "host timeout") }; break }
+            if !headersSent {
+                let status = (value["status"] as? NSNumber)?.intValue ?? 200
+                let pairs = value["headers"] as? [String: String] ?? [:]
+                guard (100...599).contains(status), pairs.allSatisfy({ validHeader($0.key, $0.value) }) else { return }
+                var response = "HTTP/1.1 \(status) OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n"
+                for (key, value) in pairs where !Self.hopHeaders.contains(key.lowercased()) { response += "\(key): \(value)\r\n" }
+                guard socket.write(response + "\r\n") else { return }; headersSent = true
             }
-            let chunk = Data(base64Encoded: part["bodyB64"] as? String ?? "") ?? Data()
-            if !chunk.isEmpty {
-                writeRaw(fd, "\(String(chunk.count, radix: 16))\r\n")
-                _ = chunk.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, chunk.count) }
-                writeRaw(fd, "\r\n")
+            guard let bytes = Data(base64Encoded: value["bodyB64"] as? String ?? "") else { return }
+            if !bytes.isEmpty {
+                var chunk = Data("\(String(bytes.count, radix: 16))\r\n".utf8); chunk.append(bytes); chunk.append(Data("\r\n".utf8))
+                guard socket.write(chunk) else { return }
             }
-            if boolValue(part["final"]) {
-                writeRaw(fd, "0\r\n\r\n")
-                break
-            }
+            if (value["final"] as? NSNumber)?.boolValue == true { socket.write("0\r\n\r\n"); return }
         }
     }
-
-    private func acceptWebSocket(_ fd: Int32, path: String, headers: [String: String]) {
-        if wsLimit.increment() > 16 {
-            wsLimit.decrement()
-            writeHttp(fd, status: 503, body: "too many tunnels")
-            return
+    private func upgrade(_ socket: DshLocalSocket, _ path: String, _ headers: [String: String]) {
+        guard let key = headers["sec-websocket-key"], Data(base64Encoded: key)?.count == 16,
+              headers["sec-websocket-version"] == "13" else { http(socket, 400, "invalid WebSocket handshake"); return }
+        let channel = "ws-\(UUID().uuidString)", waiter = DshRelayWaiter(), peer = WebSocketPeer(socket)
+        let accepted = locked { () -> Bool in
+            guard !ended && wsCount < 16 else { return false }
+            wsCount += 1; waiters[channel] = waiter; waiterSockets[channel] = socket; webSockets[channel] = peer; return true
         }
-        let channel = "ws-\(UUID().uuidString)"
-        let queue = DshWaiter()
-        setWaiter(channel, queue)
-        var forwarded: [String: Any] = [:]
-        for (name, value) in headers where name != "authorization" && name != "host" {
-            forwarded[name] = value
-        }
-        sendInner("ws_open", ["path": path, "headers": forwarded], channel)
-        let opened = queue.poll(timeout: 10)
-        removeWaiter(channel)
-        if opened == nil || !boolValue(opened?["ok"]) {
-            wsLimit.decrement()
-            let reason: String
-            if opened == nil {
-                reason = "host websocket timeout"
-            } else {
-                reason = (opened?["reason"] as? String)?.nilIfEmpty ?? "host websocket rejected"
-            }
-            NSLog("[DshRelayLoopback] ws_open failed path=%@ reason=%@", path, reason)
-            writeHttp(fd, status: 502, body: reason)
-            return
-        }
-        let accept = websocketAccept(headers["sec-websocket-key"] ?? "")
-        writeRaw(fd, "HTTP/1.1 101 Switching Protocols\r\n")
-        writeRaw(fd, "Upgrade: websocket\r\nConnection: Upgrade\r\n")
-        writeRaw(fd, "Sec-WebSocket-Accept: \(accept)\r\n\r\n")
-        var disableTimeout = timeval(tv_sec: 0, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &disableTimeout, socklen_t(MemoryLayout<timeval>.size))
-        socketsLock.lock()
-        sockets[channel] = fd
-        socketsLock.unlock()
+        guard accepted else { http(socket, 503, "too many WebSockets"); return }
         defer {
-            socketsLock.lock()
-            sockets.removeValue(forKey: channel)
-            socketsLock.unlock()
-            wsLimit.decrement()
+            waiter.close()
+            let closed = locked { () -> Bool in
+                waiters.removeValue(forKey: channel); waiterSockets.removeValue(forKey: channel)
+                webSockets.removeValue(forKey: channel); wsCount -= 1; return ended
+            }
+            if !closed { sendInner("ws_close", ["code": 1000, "reason": ""], channel) }
         }
-        while !stopped {
-            guard let frame = readWsFrame(fd) else { break }
+        sendInner("ws_open", ["path": path, "headers": forwarded(headers)], channel)
+        let response = waiter.poll(10)
+        locked { _ = waiters.removeValue(forKey: channel) }
+        guard !socket.closed else { return }
+        guard (response?["ok"] as? NSNumber)?.boolValue == true else { http(socket, 502, "host WebSocket rejected"); return }
+        let accept = Data(Insecure.SHA1.hash(data: Data((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))).base64EncodedString()
+        peer.lock.lock()
+        let sent = socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n")
+        if sent {
+            peer.upgraded = true
+            for data in peer.pending { socket.write(data) }; peer.pending.removeAll(); peer.pendingBytes = 0
+        }
+        peer.lock.unlock()
+        guard sent else { return }
+        socket.timeout(0)
+        let messages = DshWsMessages()
+        while !socket.closed {
+            guard let frame = DshWsFrame.read(socket) else { return }
             switch frame.opcode {
-            case 8:
-                sendInner("ws_close", ["code": 1000, "reason": ""], channel)
-                return
-            case 9:
-                writeUnmasked(fd, opcode: 10, payload: frame.payload)
-            case 10:
-                continue
-            case 0, 1, 2:
-                sendInner(
-                    "ws_frame",
-                    [
-                        "dataB64": frame.payload.base64EncodedString(),
-                        "opcode": frame.opcode == 2 ? 2 : 1,
-                    ],
-                    channel
-                )
+            case 8: peer.write(DshWsFrame.encode(8, frame.payload)); return
+            case 9: peer.write(DshWsFrame.encode(10, frame.payload))
+            case 10: break
             default:
-                continue
+                do {
+                    if let message = try messages.accept(frame) {
+                        sendInner("ws_frame", ["opcode": message.opcode, "dataB64": message.payload.base64EncodedString()], channel)
+                    }
+                } catch { return }
             }
         }
     }
-
-    private func writeWsFrame(channel: String, payload: [String: Any]) {
-        socketsLock.lock()
-        let fd = sockets[channel]
-        socketsLock.unlock()
-        guard let fd else { return }
-        let data = Data(base64Encoded: payload["dataB64"] as? String ?? "") ?? Data()
-        let opcode = intValue(payload["opcode"], fallback: 1) == 2 ? 2 : 1
-        writeUnmasked(fd, opcode: opcode, payload: data)
+    private func http(_ socket: DshLocalSocket, _ status: Int, _ text: String) {
+        let bytes = Data(text.utf8)
+        var response = Data("HTTP/1.1 \(status) ERROR\r\nContent-Length: \(bytes.count)\r\nConnection: close\r\n\r\n".utf8)
+        response.append(bytes); socket.write(response)
     }
-
-    private func writeUnmasked(_ fd: Int32, opcode: Int, payload: Data) {
-        socketsLock.lock()
-        defer { socketsLock.unlock() }
-        var header = Data([UInt8(0x80 | (opcode & 0x0f))])
-        if payload.count < 126 {
-            header.append(UInt8(payload.count))
-        } else {
-            header.append(126)
-            header.append(UInt8((payload.count >> 8) & 0xff))
-            header.append(UInt8(payload.count & 0xff))
-        }
-        _ = header.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, header.count) }
-        _ = payload.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, payload.count) }
+    private func validHeader(_ name: String, _ value: String) -> Bool {
+        name.range(of: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$", options: .regularExpression) != nil && !value.contains("\r") && !value.contains("\n") && !value.contains("\0")
     }
-
-    private func readWsFrame(_ fd: Int32) -> (opcode: Int, payload: Data)? {
-        guard let head = readExact(fd, 2), head.count == 2 else { return nil }
-        let opcode = Int(head[0] & 0x0f)
-        let masked = (head[1] & 0x80) != 0
-        var len = Int(head[1] & 0x7f)
-        if len == 126 {
-            guard let extra = readExact(fd, 2), extra.count == 2 else { return nil }
-            len = (Int(extra[0]) << 8) | Int(extra[1])
-        } else if len == 127 {
-            guard let extra = readExact(fd, 8), extra.count == 8 else { return nil }
-            len = extra.reduce(0) { ($0 << 8) | Int($1) }
-        }
-        let mask = masked ? (readExact(fd, 4) ?? Data()) : Data()
-        guard var data = readExact(fd, len) else { return nil }
-        if masked && mask.count == 4 {
-            for i in 0..<data.count {
-                data[i] ^= mask[i % 4]
-            }
-        }
-        return (opcode, data)
+    private func forwarded(_ headers: [String: String]) -> [String: String] {
+        headers.filter { !Self.hopHeaders.contains($0.key) && $0.key != "authorization" && $0.key != "host" }
     }
-
-    private func websocketAccept(_ key: String) -> String {
-        let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        var digest = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
-        let bytes = Array((key + magic).utf8)
-        _ = bytes.withUnsafeBytes { CC_SHA1($0.baseAddress, CC_LONG(bytes.count), &digest) }
-        return Data(digest).base64EncodedString()
-    }
-
-    private func readHeaders(_ fd: Int32) -> Data? {
-        var buffer = Data()
-        var last: UInt8 = 0
-        var byte: UInt8 = 0
-        while true {
-            let n = Darwin.read(fd, &byte, 1)
-            if n <= 0 { return nil }
-            buffer.append(byte)
-            if last == 13 && byte == 10 && buffer.count >= 4 {
-                if buffer[buffer.count - 4] == 13 && buffer[buffer.count - 3] == 10 {
-                    return buffer
-                }
-            }
-            last = byte
-            if buffer.count > 64 * 1024 { return nil }
-        }
-    }
-
-    private func readExact(_ fd: Int32, _ count: Int) -> Data? {
-        var data = Data(count: count)
-        var offset = 0
-        while offset < count {
-            let n = data.withUnsafeMutableBytes { raw in
-                Darwin.read(fd, raw.baseAddress!.advanced(by: offset), count - offset)
-            }
-            if n <= 0 { break }
-            offset += n
-        }
-        return offset == count ? data : data.prefix(offset)
-    }
-
-    private func writeHttp(_ fd: Int32, status: Int, body: String) {
-        let bytes = Data(body.utf8)
-        writeRaw(fd, "HTTP/1.1 \(status) ERROR\r\nContent-Length: \(bytes.count)\r\nConnection: close\r\n\r\n")
-        _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, bytes.count) }
-    }
-
-    private func writeRaw(_ fd: Int32, _ text: String) {
-        let bytes = Array(text.utf8)
-        _ = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, bytes.count) }
-    }
-
-    private func waiter(_ channel: String) -> DshWaiter? {
-        waiterLock.lock()
-        defer { waiterLock.unlock() }
-        return httpWaiters[channel]
-    }
-
-    private func setWaiter(_ channel: String, _ waiter: DshWaiter) {
-        waiterLock.lock()
-        httpWaiters[channel] = waiter
-        waiterLock.unlock()
-    }
-
-    private func removeWaiter(_ channel: String) {
-        waiterLock.lock()
-        httpWaiters.removeValue(forKey: channel)
-        waiterLock.unlock()
-    }
-}
-
-private enum DshLoopbackError: Error {
-    case bindFailed
-}
-
-private final class DshWaiter {
-    private let lock = NSCondition()
-    private var items: [[String: Any]] = []
-
-    func offer(_ item: [String: Any]) {
-        lock.lock()
-        items.append(item)
-        lock.signal()
-        lock.unlock()
-    }
-
-    func poll(timeout: TimeInterval) -> [String: Any]? {
-        lock.lock()
-        defer { lock.unlock() }
-        let deadline = Date().addingTimeInterval(timeout)
-        while items.isEmpty {
-            let remaining = deadline.timeIntervalSinceNow
-            if remaining <= 0 { return nil }
-            _ = lock.wait(until: Date().addingTimeInterval(remaining))
-        }
-        return items.removeFirst()
-    }
-}
-
-private final class DshAtomicInt {
-    private let lock = NSLock()
-    private var value = 0
-
-    func increment() -> Int {
-        lock.lock()
-        value += 1
-        let next = value
-        lock.unlock()
-        return next
-    }
-
-    func decrement() {
-        lock.lock()
-        value -= 1
-        lock.unlock()
-    }
-}
-
-private func intValue(_ value: Any?, fallback: Int) -> Int {
-    if let number = value as? Int { return number }
-    if let number = value as? NSNumber { return number.intValue }
-    if let text = value as? String, let number = Int(text) { return number }
-    return fallback
-}
-
-private func boolValue(_ value: Any?) -> Bool {
-    if let flag = value as? Bool { return flag }
-    if let number = value as? NSNumber { return number.boolValue }
-    if let text = value as? String { return text == "true" || text == "1" }
-    return false
-}
-
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+    private static let hopHeaders: Set<String> = ["connection", "transfer-encoding", "content-length", "upgrade", "keep-alive", "trailer"]
+    @discardableResult private func locked<T>(_ body: () throws -> T) rethrows -> T { lock.lock(); defer { lock.unlock() }; return try body() }
 }

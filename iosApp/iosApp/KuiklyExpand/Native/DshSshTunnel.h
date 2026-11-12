@@ -1,8 +1,11 @@
 #import <Foundation/Foundation.h>
+#import "DshSshSession.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
 @interface DshSshTunnel : NSObject
+
+- (instancetype)initWithSessionFactory:(DshSshSessionFactory)factory;
 
 @property (nonatomic, copy, nullable) void (^onState)(NSDictionary *state);
 

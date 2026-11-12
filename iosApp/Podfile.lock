@@ -2,10 +2,12 @@ PODS:
   - CocoaLumberjack (3.9.1):
     - CocoaLumberjack/Core (= 3.9.1)
   - CocoaLumberjack/Core (3.9.1)
+  - DshLibssh2 (1.11.1):
+    - OpenSSL-Universal (= 3.6.2000)
   - KuiklyWebviewIOS (1.0.0):
     - OpenKuiklyIOSRender
-  - NMSSH (2.3.1)
   - OpenKuiklyIOSRender (2.24.0)
+  - OpenSSL-Universal (3.6.2000)
   - SDWebImage (5.21.7):
     - SDWebImage/Core (= 5.21.7)
   - SDWebImage/Core (5.21.7)
@@ -14,8 +16,8 @@ PODS:
     - CocoaLumberjack (~> 3.0)
 
 DEPENDENCIES:
+  - DshLibssh2 (from `Podspecs/DshLibssh2.podspec`)
   - KuiklyWebviewIOS (from `https://github.com/Kuikly-contrib/KuiklyWebview.git`, tag `1.0.0`)
-  - NMSSH (= 2.3.1)
   - OpenKuiklyIOSRender (~> 2.24.0)
   - SDWebImage
   - shared (from `../shared`)
@@ -24,11 +26,13 @@ DEPENDENCIES:
 SPEC REPOS:
   trunk:
     - CocoaLumberjack
-    - NMSSH
     - OpenKuiklyIOSRender
+    - OpenSSL-Universal
     - SDWebImage
 
 EXTERNAL SOURCES:
+  DshLibssh2:
+    :podspec: Podspecs/DshLibssh2.podspec
   KuiklyWebviewIOS:
     :git: https://github.com/Kuikly-contrib/KuiklyWebview.git
     :tag: 1.0.0
@@ -48,13 +52,14 @@ CHECKOUT OPTIONS:
 
 SPEC CHECKSUMS:
   CocoaLumberjack: e4ba3b414dfca8c1916c6303d37f63b3a95134c6
+  DshLibssh2: a45a84b65f1659fdf5975c2c328d5ca709c66d19
   KuiklyWebviewIOS: ee364aedfbd65165016192041811e6f6491763a7
-  NMSSH: cd689ae535a1581a6dd9fd4600ff71247df510a6
   OpenKuiklyIOSRender: 7e846eb2455ead4090f475f692e33ac717c4bcac
+  OpenSSL-Universal: ecee7b138fa75a74ecf00d7ffd248fb584739b9e
   SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf
   shared: d8b6d38fd437245727fc107299c3f3235c5baae4
   SVGKit: 3c8468aab0026048532a3b27a0c81cdd939f0649
 
-PODFILE CHECKSUM: 047d3d74c95b62f337ce5be185696edd0a6ef3be
+PODFILE CHECKSUM: 50384ea82e52d6dc161d9b9231d0484f8f15746e
 
 COCOAPODS: 1.16.2

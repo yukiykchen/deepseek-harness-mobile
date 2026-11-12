@@ -1,6 +1,6 @@
 # App 与 Host 协议
 
-这份文档记录 **DSH App 实际调用的 Host 协议**，方便对照代码和官方 Harness API。权威实现在 `shared/src/commonMain/kotlin/com/example/dsh/dsh/` 下的 `DshHostProtocol.kt`（常量与时间线解析）和 `DshHostClient.kt`（RPC 调用）。方法名与官方 `packages/host/apiproxy` 对齐，App **不自定 JSON-RPC 方法**。
+这份文档记录 **DSH App 实际调用的 Host 协议**，方便对照代码和官方 Harness API。权威实现在 `model/DshHostWireProtocol.kt`（常量与时间线解析）和 `data/DshHostClient.kt`（RPC 调用），均位于 `shared/src/commonMain/kotlin/io/github/yukiykchen/dsh/`。方法名与官方 `packages/host/apiproxy` 对齐，App **不自定 JSON-RPC 方法**。
 
 扫码 Relay 的配对、密封隧道不属于 Host 协议，见 [dsh-scan-remote](https://github.com/yukiykchen/dsh-scan-remote)。配对成功后，App 只对 **本机 loopback 上的 Host** 说话，信封与 SSH 相同。
 
@@ -39,6 +39,8 @@ Authorization: Bearer <token>   // token 非空时
 
 `rpcId` 由 App 生成：`dsh-g{connectionGeneration}-{seq}`。连接世代失效时，在途请求以 `generation-cancelled` 结束。
 
+尚未派发的请求保存提交时的 payload 快照。重连等待期间新提交的请求归入下一条连接，不静默丢弃；失效世代的已派发请求立即结束，晚到的 HTTP 响应不重复通知。主动取消一个 RPC 会移除其本地回调，但不表示原生 HTTP 已中止；停止生成另行发送 `session.cancel`。
+
 成功响应取 `result.ok == true` 的 `result.value`：
 
 ```json
@@ -75,6 +77,8 @@ Authorization: Bearer <token>   // token 非空时
 4. `READY` 后冲刷缓冲帧、发出排队中的 RPC
 
 断开后 `generation++`，1 秒后重连。
+
+事件流连接或基线握手超过 30 秒仍未完成时，废弃该连接世代后重试；空的成功基线不进入 `READY`。同一连接世代的重复 WebSocket `OPEN` 不重新握手。主页按连接世代恢复同步，不通过状态文案判断是否重连成功。
 
 ## 4. App 已调用的方法
 
@@ -215,13 +219,13 @@ Authorization: Bearer <token>   // token 非空时
 
 | 文件 | 职责 |
 | --- | --- |
-| `DshHostProtocol.kt` | 路径常量、`session.history` 时间线解析 |
-| `DshHostConnectionRuntime.kt` | 连接世代、mux/host WebSocket、RPC 排队与发送 |
-| `DshHostClient.kt` | 扫码 / SSH 共用的 Host 客户端：所有 RPC、流式回复、事件分发 |
-| `DshToolViewBodies.kt` | 工具 `view`（terminal/read/diff/search/web）解析 |
-| `DshRemoteToolCallModel.kt` | `tool/call`+`result` → 卡片模型 |
-| `DshHostStore.kt` | 会话、事件、队列、pending 内存投影 |
-| `DshWebSocketModule.kt` | 传输 |
+| `model/DshHostWireProtocol.kt` | 路径常量、`session.history` 时间线解析 |
+| `data/DshHostConnection.kt` | 连接世代、mux/host WebSocket、RPC 排队与发送 |
+| `data/DshHostClient.kt` | 扫码 / SSH 共用的 Host 客户端：所有 RPC、流式回复、事件分发 |
+| `model/DshToolViewBodies.kt` | 工具 `view`（terminal/read/diff/search/web）解析 |
+| `model/DshRemoteToolCalls.kt` | `tool/call`+`result` → 卡片模型 |
+| `model/DshModels.kt` | `DshHostStore`：会话、事件、队列、pending 内存投影 |
+| `platform/DshWebSocketModule.kt` | 传输 |
 
 官方对照：
 

@@ -27,6 +27,7 @@ struct Index {
     incoming['appId'] = 1;
     incoming['embeddedEngine'] = false;
     incoming['databaseDir'] = DshOhosContext.databaseDir();
+    incoming['verboseDiagnostics'] = false;
     this.pageData = incoming as KRRecord;
   }
 

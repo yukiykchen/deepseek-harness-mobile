@@ -23,10 +23,14 @@
         if (callback) callback(@{ @"phase": @"ERROR", @"message": @"SSH 私钥读取失败", @"localPort": @0, @"generation": @0 });
         return;
     }
+    _tunnel.onState = nil;
     [_tunnel disconnect];
     _tunnel = [[DshSshTunnel alloc] init];
+    __weak DshEngineModule *weakSelf = self;
+    __weak DshSshTunnel *weakTunnel = _tunnel;
     _tunnel.onState = ^(NSDictionary *state) {
-        if (callback) callback(state);
+        DshEngineModule *owner = weakSelf;
+        if (owner && owner->_tunnel == weakTunnel && callback) callback(state);
     };
     NSInteger port = [params[@"port"] integerValue];
     if (port <= 0) port = 22;
@@ -47,8 +51,14 @@
 }
 
 - (void)stopSsh:(NSDictionary *)args {
-    [_tunnel disconnect];
     _tunnel.onState = nil;
+    [_tunnel disconnect];
+    _tunnel = nil;
+}
+
+- (void)dealloc {
+    _tunnel.onState = nil;
+    [_tunnel disconnect];
 }
 
 - (id)sshEndpoint:(NSDictionary *)args {

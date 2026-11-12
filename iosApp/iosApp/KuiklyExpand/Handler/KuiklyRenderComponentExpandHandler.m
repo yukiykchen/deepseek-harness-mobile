@@ -6,6 +6,12 @@
 static NSString * const kDshImageTag = @"DshImage";
 static const void *kDshImageSrcKey = &kDshImageSrcKey;
 
+static void DshImageDebugLog(NSString *message) {
+#if DEBUG
+    NSLog(@"[%@] %@", kDshImageTag, message);
+#endif
+}
+
 @implementation KuiklyRenderComponentExpandHandler
 
 + (void)load {
@@ -21,8 +27,8 @@ static const void *kDshImageSrcKey = &kDshImageSrcKey;
                                               withExtension:fileExtension
                                                subdirectory:@"common"];
     NSURL *resolved = byBase ?: byPath ?: inCommon;
-    NSLog(@"[%@] bundle lookup kuiklyName=%@.%@ baseName=%@ byBase=%@ byPath=%@ inCommon=%@ -> %@",
-          kDshImageTag, fileName, fileExtension, baseName, byBase, byPath, inCommon, resolved);
+    DshImageDebugLog([NSString stringWithFormat:@"bundle lookup ext=%@ resolved=%d",
+                      fileExtension, resolved != nil]);
     return resolved;
 }
 
@@ -30,7 +36,7 @@ static const void *kDshImageSrcKey = &kDshImageSrcKey;
     if (url.length == 0) {
         imageView.image = nil;
         objc_setAssociatedObject(imageView, kDshImageSrcKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        NSLog(@"[%@] clear image", kDshImageTag);
+        DshImageDebugLog(@"clear image");
         return YES;
     }
     [self dsh_logBundleSvgsOnce];
@@ -38,8 +44,8 @@ static const void *kDshImageSrcKey = &kDshImageSrcKey;
     BOOL isSvg = [self dsh_isSVG:url] || [self dsh_isSVG:resolved.path] || [self dsh_isSVG:resolved.absoluteString];
     BOOL exists = resolved.isFileURL && resolved.path.length > 0 &&
         [[NSFileManager defaultManager] fileExistsAtPath:resolved.path];
-    NSLog(@"[%@] src=%@ resolved=%@ filePath=%@ exists=%d isSvg=%d",
-          kDshImageTag, url, resolved, resolved.path, exists, isSvg);
+    DshImageDebugLog([NSString stringWithFormat:@"image srcChars=%lu file=%d svg=%d exists=%d",
+                      (unsigned long)url.length, resolved.isFileURL, isSvg, exists]);
 
     objc_setAssociatedObject(imageView, kDshImageSrcKey, url, OBJC_ASSOCIATION_COPY_NONATOMIC);
     if (isSvg) {
@@ -54,7 +60,8 @@ static const void *kDshImageSrcKey = &kDshImageSrcKey;
             }
             NSArray *fatal = svgImage.parseErrorsAndWarnings.errorsFatal;
             if (fatal.count > 0) {
-                NSLog(@"[%@] svg parse fatal src=%@ errors=%@", kDshImageTag, url, fatal);
+                DshImageDebugLog([NSString stringWithFormat:@"svg parse fatal errors=%lu",
+                                  (unsigned long)fatal.count]);
             }
             UIImage *uiImage = svgImage.UIImage;
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -65,10 +72,10 @@ static const void *kDshImageSrcKey = &kDshImageSrcKey;
                 }
                 if (uiImage) {
                     strongView.image = uiImage;
-                    NSLog(@"[%@] svg loaded size=%.0fx%.0f path=%@",
-                          kDshImageTag, uiImage.size.width, uiImage.size.height, svgURL.path ?: svgURL.absoluteString);
+                    DshImageDebugLog([NSString stringWithFormat:@"svg loaded size=%.0fx%.0f",
+                                      uiImage.size.width, uiImage.size.height]);
                 } else {
-                    NSLog(@"[%@] svg FAILED src=%@ path=%@", kDshImageTag, url, svgURL.path ?: svgURL.absoluteString);
+                    DshImageDebugLog(@"svg load failed");
                 }
             });
         });
@@ -106,8 +113,8 @@ static const void *kDshImageSrcKey = &kDshImageSrcKey;
         NSString *ext = relative.pathExtension;
         NSString *name = relative.stringByDeletingPathExtension.lastPathComponent;
         NSURL *url = [[NSBundle mainBundle] URLForResource:name withExtension:ext];
-        NSLog(@"[%@] assets src=%@ relative=%@ name=%@ ext=%@ url=%@ bundleRoot=%@",
-              kDshImageTag, src, relative, name, ext, url, [NSBundle mainBundle].bundlePath);
+        DshImageDebugLog([NSString stringWithFormat:@"assets ext=%@ resolved=%d",
+                          ext, url != nil]);
         return url;
     }
     return [NSURL URLWithString:src];
@@ -117,11 +124,8 @@ static const void *kDshImageSrcKey = &kDshImageSrcKey;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         NSArray<NSString *> *svgs = [[NSBundle mainBundle] pathsForResourcesOfType:@"svg" inDirectory:nil];
-        NSLog(@"[%@] mainBundle=%@ svgCount=%lu files=%@",
-              kDshImageTag,
-              [NSBundle mainBundle].bundlePath,
-              (unsigned long)svgs.count,
-              svgs);
+        DshImageDebugLog([NSString stringWithFormat:@"mainBundle svgCount=%lu",
+                          (unsigned long)svgs.count]);
     });
 }
 

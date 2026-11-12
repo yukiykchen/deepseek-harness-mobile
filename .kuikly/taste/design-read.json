@@ -1,0 +1,10 @@
+{
+  "primaryTask": "Connect to the user's DSH host using a paired relay or an SSH profile",
+  "visualTone": "Quiet, trustworthy, utilitarian; preserve the existing cross-platform form design",
+  "hierarchy": ["Connection mode and connect action", "Profile fields and key selection", "Connection errors and fingerprint confirmation"],
+  "colorStrategy": "Existing neutral surfaces, blue actions, red errors",
+  "avoid": ["New decorative sections", "Unreachable actions when the keyboard opens", "Unmasked private key passphrases"],
+  "density": 6,
+  "motion": 1,
+  "designExpression": 2
+}

@@ -64,8 +64,10 @@ enum DshSealedTunnelCrypto {
     }
 
     static func randomBytes(_ count: Int = randomBytes) -> Data {
+        precondition(count > 0)
         var data = Data(count: count)
-        _ = data.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!) }
+        let status = data.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!) }
+        precondition(status == errSecSuccess, "Secure random generation failed")
         return data
     }
 
@@ -123,6 +125,13 @@ enum DshSealedTunnelCrypto {
         )
     }
 
+    static func createHostCipher(masterKeyB64: String, accessSessionId: String, clientRandomB64: String, serverRandomB64: String) throws -> DshSecureCipher {
+        let material = try deriveMaterial(masterKeyB64: masterKeyB64, accessSessionId: accessSessionId,
+            clientRandomB64: clientRandomB64, serverRandomB64: serverRandomB64)
+        return DshSecureCipher(accessSessionId: accessSessionId, sendDirection: "d2c", sendKey: material.d2cKey,
+            sendNonceBase: material.d2cNonce, receiveDirection: "c2d", receiveKey: material.c2dKey, receiveNonceBase: material.c2dNonce)
+    }
+
     private static func deriveMaterial(
         masterKeyB64: String,
         accessSessionId: String,
@@ -154,10 +163,9 @@ enum DshSealedTunnelCrypto {
     }
 
     private static func jsonQuote(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
+        // String JSON serialization is total, including control characters and embedded newlines.
+        let bytes = try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func hmacSha256(key: Data, message: Data) -> Data {
@@ -226,6 +234,7 @@ final class DshSecureCipher {
         lock.lock()
         defer { lock.unlock() }
         let sequence = sendSequence
+        guard sequence < UInt64.max else { throw DshE2eeError.sequence }
         let json = try JSONSerialization.data(withJSONObject: value, options: [])
         let sealed = try AES.GCM.seal(
             json,
@@ -245,8 +254,9 @@ final class DshSecureCipher {
         guard payload.seq.range(of: "^(0|[1-9][0-9]*)$", options: .regularExpression) != nil else {
             throw DshE2eeError.sequence
         }
-        let sequence = UInt64(payload.seq) ?? 0
-        guard sequence == receiveSequence else { throw DshE2eeError.sequence }
+        guard let sequence = UInt64(payload.seq), sequence < UInt64.max, sequence == receiveSequence else {
+            throw DshE2eeError.sequence
+        }
         let sealed = try DshSealedTunnelCrypto.decodeBase64Url(payload.ciphertextB64)
         guard sealed.count >= 16 else { throw DshE2eeError.truncated }
         let ciphertext = sealed.dropLast(16)
@@ -258,10 +268,10 @@ final class DshSecureCipher {
                 tag: Data(tag)
             )
             let plain = try AES.GCM.open(box, using: receiveKey, authenticating: aad(receiveDirection, sequence))
-            receiveSequence += 1
             guard let object = try JSONSerialization.jsonObject(with: plain) as? [String: Any] else {
                 throw DshE2eeError.authFailed
             }
+            receiveSequence += 1
             return object
         } catch {
             throw DshE2eeError.authFailed

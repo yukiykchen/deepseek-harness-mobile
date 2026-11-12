@@ -74,10 +74,26 @@ kotlin {
                 implementation(kotlin("test"))
             }
         }
+        val sqliteMain by creating {
+            dependsOn(commonMain)
+            dependencies {
+                implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
+            }
+        }
+        val sqliteTest by creating {
+            dependsOn(commonTest)
+        }
+        val androidUnitTest by getting {
+            dependsOn(sqliteTest)
+            dependencies {
+                // The Android JNA AAR omits desktop natives needed by host-side SQLite tests.
+                implementation("net.java.dev.jna:jna:5.18.1@jar")
+            }
+        }
         val androidMain by getting {
+            dependsOn(sqliteMain)
             dependencies {
                 api("com.tencent.kuikly-open:core-render-android:${Version.getKuiklyVersion()}")
-                implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
             }
         }
@@ -86,9 +102,8 @@ kotlin {
         val iosArm64Main by getting
         val iosSimulatorArm64Main by getting
         val iosMain by creating {
-            dependsOn(commonMain)
+            dependsOn(sqliteMain)
             dependencies {
-                implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
             }
             iosX64Main.dependsOn(this)
             iosArm64Main.dependsOn(this)
@@ -98,7 +113,7 @@ kotlin {
         val iosArm64Test by getting
         val iosSimulatorArm64Test by getting
         val iosTest by creating {
-            dependsOn(commonTest)
+            dependsOn(sqliteTest)
             iosX64Test.dependsOn(this)
             iosArm64Test.dependsOn(this)
             iosSimulatorArm64Test.dependsOn(this)
@@ -106,7 +121,7 @@ kotlin {
     }
 }
 
-group = "com.example.dsh"
+group = "io.github.yukiykchen.dsh"
 version = System.getenv("kuiklyBizVersion") ?: "1.0.0"
 
 publishing {
@@ -136,7 +151,7 @@ dependencies {
 }
 
 android {
-    namespace = "com.example.dsh.shared"
+    namespace = "io.github.yukiykchen.dsh.shared"
     compileSdk = 34
     defaultConfig {
         minSdk = 21

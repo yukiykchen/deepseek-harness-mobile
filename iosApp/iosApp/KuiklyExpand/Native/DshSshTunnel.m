@@ -1,428 +1,210 @@
 #import "DshSshTunnel.h"
+#import "DshSshSession.h"
 
-#import <CommonCrypto/CommonDigest.h>
-#import <arpa/inet.h>
-#import <fcntl.h>
-#import <netinet/in.h>
-#import <netinet/tcp.h>
-#import <sys/socket.h>
-#import <unistd.h>
-
-#if __has_include(<NMSSH/NMSSH.h>)
-#import <NMSSH/NMSSH.h>
-#else
-#import "NMSSH.h"
-#endif
-
-#if __has_include(<NMSSH/libssh2.h>)
-#import <NMSSH/libssh2.h>
-#elif __has_include(<libssh2.h>)
-#import <libssh2.h>
-#elif __has_include("libssh2.h")
-#import "libssh2.h"
-#endif
-
-static const NSTimeInterval kConnectTimeout = 10;
-static const int kKeepAliveSeconds = 15;
-
-@interface DshSshConn : NSObject
-@property (nonatomic, assign) int fd;
-@property (nonatomic, assign) LIBSSH2_CHANNEL *channel;
+@interface DshSshAttempt : NSObject
+@property (nonatomic) int64_t generation;
+@property (nonatomic, strong) NSMutableData *key;
+@property (nonatomic, copy) NSString *passphrase;
+@property (nonatomic, copy) NSString *host;
+@property (nonatomic, copy) NSString *username;
+@property (nonatomic, copy) NSString *fingerprint;
+@property (nonatomic) NSInteger port;
+@property (nonatomic) NSInteger remotePort;
+@property (nonatomic, strong) id<DshSshSession> session;
 @end
-
-@implementation DshSshConn
+@implementation DshSshAttempt
 @end
 
 @implementation DshSshTunnel {
-    NSString *_host;
-    NSInteger _port;
-    NSString *_username;
-    NSInteger _remoteDshPort;
-    NSData *_keyBytes;
-    NSString *_passphrase;
-    NSString *_acceptedFingerprint;
-    int _listenFd;
-    int _localPort;
-    BOOL _stopped;
-    BOOL _connecting;
+    NSRecursiveLock *_lock;
+    DshSshSessionFactory _factory;
+    DshSshAttempt *_active;
+    NSDictionary *_state;
     int64_t _generation;
-    NSLock *_lock;
-    NSThread *_pumpThread;
-    NSThread *_reconnectThread;
-    NMSSHSession *_session;
-    NSMutableArray<DshSshConn *> *_conns;
+    BOOL _enabled;
+    NSUInteger _retries;
+    NSString *_host, *_username, *_passphrase, *_fingerprint, *_pendingFingerprint;
+    NSInteger _port, _remotePort;
+    NSMutableData *_key;
+    void (^_onState)(NSDictionary *);
 }
 
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _listenFd = -1;
-        _lock = [[NSLock alloc] init];
-        _stopped = YES;
-        _passphrase = @"";
-        _acceptedFingerprint = @"";
-        _conns = [NSMutableArray array];
+- (instancetype)init { return [self initWithSessionFactory:^{ return [DshLibsshSession new]; }]; }
+
+- (instancetype)initWithSessionFactory:(DshSshSessionFactory)factory {
+    if ((self = [super init])) {
+        _factory = [factory copy];
+        _lock = [NSRecursiveLock new];
+        _state = @{ @"phase": @"IDLE", @"localPort": @0, @"generation": @0 };
     }
     return self;
 }
 
-- (void)connectWithHost:(NSString *)host
-                   port:(NSInteger)port
-               username:(NSString *)username
-          remoteDshPort:(NSInteger)remoteDshPort
-               keyBytes:(NSData *)keyBytes
-             passphrase:(NSString *)passphrase
-            fingerprint:(NSString *)fingerprint {
+- (void)setOnState:(void (^)(NSDictionary *))callback { [_lock lock]; _onState = [callback copy]; [_lock unlock]; }
+- (void (^)(NSDictionary *))onState { [_lock lock]; id callback = _onState; [_lock unlock]; return callback; }
+
+- (void)connectWithHost:(NSString *)host port:(NSInteger)port username:(NSString *)username
+          remoteDshPort:(NSInteger)remotePort keyBytes:(NSData *)key passphrase:(NSString *)passphrase fingerprint:(NSString *)fingerprint {
     [_lock lock];
-    if (_connecting) {
-        [_lock unlock];
-        return;
-    }
-    _connecting = YES;
-    _stopped = NO;
-    _host = [host copy];
-    _port = port;
-    _username = [username copy];
-    _remoteDshPort = remoteDshPort;
-    _keyBytes = [keyBytes copy];
-    _passphrase = passphrase ?: @"";
-    _acceptedFingerprint = fingerprint ?: @"";
-    [_lock unlock];
-    [NSThread detachNewThreadWithBlock:^{ [self connectInternal]; }];
+    @try {
+        if (host.length == 0 || username.length == 0 || port < 1 || port > 65535 || remotePort < 1 || remotePort > 65535 || key.length == 0 || key.length > 65536) {
+            [self stopResources];
+            _generation++;
+            [self emit:@"ERROR" message:@"SSH 配置或私钥无效" port:0];
+            return;
+        }
+        [self stopResources];
+        _enabled = YES;
+        _host = [host copy]; _username = [username copy]; _port = port; _remotePort = remotePort;
+        _key = [key mutableCopy]; _passphrase = [passphrase copy]; _fingerprint = [fingerprint copy];
+        _pendingFingerprint = @""; _retries = 0;
+        [self startAttempt];
+    } @finally { [_lock unlock]; }
 }
 
 - (void)acceptFingerprint:(NSString *)fingerprint {
-    if (fingerprint.length == 0 || _stopped) return;
     [_lock lock];
-    if (_connecting) {
-        [_lock unlock];
-        return;
-    }
-    _acceptedFingerprint = [fingerprint copy];
-    _connecting = YES;
-    [_lock unlock];
-    [NSThread detachNewThreadWithBlock:^{ [self connectInternal]; }];
+    @try {
+        if (!_enabled || ![_state[@"phase"] isEqual:@"FINGERPRINT_REQUIRED"] || fingerprint.length == 0 ||
+            ![fingerprint isEqual:_pendingFingerprint]) return;
+        _fingerprint = [fingerprint copy]; _pendingFingerprint = @""; _retries = 0;
+        [self startAttempt];
+    } @finally { [_lock unlock]; }
 }
 
 - (void)disconnect {
-    _stopped = YES;
     [_lock lock];
-    _generation += 1;
-    _connecting = NO;
+    [self stopResources];
+    _generation++;
+    [self emit:@"STOPPED" message:@"SSH 已断开" port:0];
     [_lock unlock];
-    [self closeListen];
-    [self publish:@{
-        @"phase": @"STOPPED",
-        @"message": @"SSH 已断开",
-        @"localPort": @0,
-        @"generation": @(_generation),
-    }];
 }
 
 - (NSString *)endpoint {
-    return _localPort > 0 ? [NSString stringWithFormat:@"http://127.0.0.1:%d", _localPort] : nil;
-}
-
-- (void)connectInternal {
     [_lock lock];
-    _generation += 1;
-    int64_t myGeneration = _generation;
-    [_lock unlock];
-    @try {
-        [self closeSession];
-        [self publish:@{ @"phase": @"CONNECTING", @"message": @"正在连接 SSH", @"localPort": @0, @"generation": @(myGeneration) }];
-        NMSSHSession *session = [[NMSSHSession alloc] initWithHost:_host port:_port andUsername:_username];
-        if (![session connectWithTimeout:@(kConnectTimeout)]) {
-            NSString *error = session.lastError.localizedDescription ?: @"无法连接 SSH 主机";
-            @throw [NSException exceptionWithName:@"DshSshConnect" reason:error userInfo:nil];
-        }
-        NSString *fingerprint = [self sha256Fingerprint:session];
-        NSString *saved = _acceptedFingerprint ?: @"";
-        if (saved.length == 0 || ![saved isEqualToString:fingerprint]) {
-            [session disconnect];
-            [self publish:@{
-                @"phase": @"FINGERPRINT_REQUIRED",
-                @"message": fingerprint ?: @"",
-                @"localPort": @0,
-                @"generation": @(myGeneration),
-            }];
-            return;
-        }
-        [self publish:@{ @"phase": @"AUTHENTICATING", @"message": @"正在验证 SSH 身份", @"localPort": @0, @"generation": @(myGeneration) }];
-        NSString *pem = [[NSString alloc] initWithData:_keyBytes encoding:NSUTF8StringEncoding];
-        if (pem.length == 0) {
-            [session disconnect];
-            @throw [NSException exceptionWithName:@"DshSshAuth" reason:@"SSH 私钥格式无法识别" userInfo:nil];
-        }
-        NSString *password = _passphrase.length > 0 ? _passphrase : nil;
-        BOOL ok = [session authenticateByInMemoryPublicKey:@"" privateKey:pem andPassword:password];
-        if (!ok || !session.isAuthorized) {
-            NSString *reason = session.lastError.localizedDescription ?: @"SSH 身份验证失败，请检查用户名和私钥";
-            [session disconnect];
-            @throw [NSException exceptionWithName:@"DshSshAuth" reason:reason userInfo:nil];
-        }
-        if (_stopped || myGeneration != [self currentGeneration]) {
-            [session disconnect];
-            return;
-        }
-        _session = session;
-        libssh2_keepalive_config(session.session, 1, kKeepAliveSeconds);
-        [self publish:@{ @"phase": @"FORWARDING", @"message": @"正在建立 DSH 转发", @"localPort": @0, @"generation": @(myGeneration) }];
-        if (![self startListen]) {
-            @throw [NSException exceptionWithName:@"DshSshForward" reason:@"SSH_PORT_IN_USE：本地转发端口分配失败" userInfo:nil];
-        }
-        [self publish:@{
-            @"phase": @"READY",
-            @"message": @"SSH 已连接",
-            @"localPort": @(_localPort),
-            @"generation": @(myGeneration),
-        }];
-        [self pump:myGeneration];
-        [self closeSession];
-        if (!_stopped && myGeneration == [self currentGeneration]) {
-            [self publish:@{
-                @"phase": @"RECONNECTING",
-                @"message": @"SSH 连接已断开，正在重连",
-                @"localPort": @(_localPort),
-                @"generation": @(myGeneration),
-            }];
-            [self scheduleReconnect];
-        }
-    } @catch (NSException *exception) {
-        NSLog(@"[DshSshTunnel] SSH connection failed: %@", exception.reason);
-        if (!_stopped && myGeneration == [self currentGeneration]) {
-            [self closeSession];
-            [self publish:@{
-                @"phase": @"ERROR",
-                @"message": [self friendlyMessage:exception.reason ?: @""],
-                @"localPort": @(_localPort),
-                @"generation": @(myGeneration),
-            }];
-        }
-    } @finally {
-        [_lock lock];
-        _connecting = NO;
-        [_lock unlock];
-    }
-}
-
-- (NSString *)sha256Fingerprint:(NMSSHSession *)session {
-    size_t length = 0;
-    int type = 0;
-    const char *hostkey = libssh2_session_hostkey(session.session, &length, &type);
-    if (!hostkey || length == 0) return @"";
-    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(hostkey, (CC_LONG)length, digest);
-    NSData *data = [NSData dataWithBytes:digest length:CC_SHA256_DIGEST_LENGTH];
-    return [@"SHA256:" stringByAppendingString:[data base64EncodedStringWithOptions:0]];
-}
-
-- (BOOL)startListen {
-    [self closeListen];
-    _listenFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (_listenFd < 0) return NO;
-    int reuse = 1;
-    setsockopt(_listenFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    int flags = fcntl(_listenFd, F_GETFL, 0);
-    fcntl(_listenFd, F_SETFL, flags | O_NONBLOCK);
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_len = sizeof(addr);
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    addr.sin_port = 0;
-    if (bind(_listenFd, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(_listenFd, 32) != 0) {
-        close(_listenFd);
-        _listenFd = -1;
-        return NO;
-    }
-    socklen_t len = sizeof(addr);
-    if (getsockname(_listenFd, (struct sockaddr *)&addr, &len) != 0) {
-        close(_listenFd);
-        _listenFd = -1;
-        return NO;
-    }
-    _localPort = ntohs(addr.sin_port);
-    return YES;
-}
-
-- (void)pump:(int64_t)myGeneration {
-    _pumpThread = [NSThread currentThread];
-    libssh2_session_set_blocking(_session.session, 0);
-    NSTimeInterval lastKeepAlive = [NSDate timeIntervalSinceReferenceDate];
-    char buffer[16384];
-    while (!_stopped && myGeneration == [self currentGeneration] && _session.isConnected) {
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        int maxfd = _listenFd;
-        if (_listenFd >= 0) FD_SET(_listenFd, &rfds);
-        int sshfd = -1;
-        if (_session.socket) {
-            sshfd = (int)CFSocketGetNative(_session.socket);
-            if (sshfd >= 0) {
-                FD_SET(sshfd, &rfds);
-                if (sshfd > maxfd) maxfd = sshfd;
-            }
-        }
-        for (DshSshConn *conn in _conns) {
-            if (conn.fd >= 0) {
-                FD_SET(conn.fd, &rfds);
-                if (conn.fd > maxfd) maxfd = conn.fd;
-            }
-        }
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 200000;
-        select(maxfd + 1, &rfds, NULL, NULL, &tv);
-        if (_listenFd >= 0 && FD_ISSET(_listenFd, &rfds)) {
-            [self acceptOne];
-        }
-        NSMutableArray<DshSshConn *> *dead = [NSMutableArray array];
-        for (DshSshConn *conn in _conns) {
-            if (conn.fd >= 0 && FD_ISSET(conn.fd, &rfds)) {
-                ssize_t n = recv(conn.fd, buffer, sizeof(buffer), 0);
-                if (n <= 0) {
-                    [dead addObject:conn];
-                    continue;
-                }
-                ssize_t offset = 0;
-                while (offset < n) {
-                    ssize_t written = libssh2_channel_write(conn.channel, buffer + offset, (size_t)(n - offset));
-                    if (written == LIBSSH2_ERROR_EAGAIN) {
-                        [NSThread sleepForTimeInterval:0.01];
-                        continue;
-                    }
-                    if (written < 0) {
-                        [dead addObject:conn];
-                        break;
-                    }
-                    offset += written;
-                }
-            }
-            ssize_t readCount = libssh2_channel_read(conn.channel, buffer, sizeof(buffer));
-            if (readCount > 0) {
-                ssize_t offset = 0;
-                while (offset < readCount) {
-                    ssize_t sent = send(conn.fd, buffer + offset, (size_t)(readCount - offset), 0);
-                    if (sent <= 0) {
-                        [dead addObject:conn];
-                        break;
-                    }
-                    offset += sent;
-                }
-            } else if (readCount < 0 && readCount != LIBSSH2_ERROR_EAGAIN) {
-                [dead addObject:conn];
-            }
-            if (libssh2_channel_eof(conn.channel)) {
-                [dead addObject:conn];
-            }
-        }
-        for (DshSshConn *conn in dead) {
-            [self closeConn:conn];
-            [_conns removeObject:conn];
-        }
-        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-        if (now - lastKeepAlive >= kKeepAliveSeconds) {
-            int secondsToNext = 0;
-            libssh2_keepalive_send(_session.session, &secondsToNext);
-            lastKeepAlive = now;
-        }
-    }
-}
-
-- (void)acceptOne {
-    struct sockaddr_in addr;
-    socklen_t len = sizeof(addr);
-    int client = accept(_listenFd, (struct sockaddr *)&addr, &len);
-    if (client < 0) return;
-    int nodelay = 1;
-    setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-    int flags = fcntl(client, F_GETFL, 0);
-    fcntl(client, F_SETFL, flags | O_NONBLOCK);
-    LIBSSH2_CHANNEL *channel = NULL;
-    for (int i = 0; i < 50 && !_stopped; i++) {
-        channel = libssh2_channel_direct_tcpip_ex(_session.session, "127.0.0.1", (int)_remoteDshPort, "127.0.0.1", _localPort);
-        if (channel) break;
-        if (libssh2_session_last_errno(_session.session) != LIBSSH2_ERROR_EAGAIN) break;
-        [NSThread sleepForTimeInterval:0.05];
-    }
-    if (!channel) {
-        NSLog(@"[DshSshTunnel] direct-tcpip failed");
-        close(client);
-        return;
-    }
-    DshSshConn *conn = [[DshSshConn alloc] init];
-    conn.fd = client;
-    conn.channel = channel;
-    [_conns addObject:conn];
-}
-
-- (void)closeConn:(DshSshConn *)conn {
-    if (conn.channel) {
-        libssh2_channel_close(conn.channel);
-        libssh2_channel_free(conn.channel);
-        conn.channel = NULL;
-    }
-    if (conn.fd >= 0) {
-        close(conn.fd);
-        conn.fd = -1;
-    }
-}
-
-- (void)scheduleReconnect {
-    if (_stopped || _reconnectThread.executing) return;
-    _reconnectThread = [[NSThread alloc] initWithBlock:^{
-        NSArray<NSNumber *> *delays = @[ @1, @2, @4, @8, @16, @30 ];
-        for (NSNumber *delay in delays) {
-            if (self->_stopped || self->_session.isConnected) return;
-            [NSThread sleepForTimeInterval:delay.doubleValue];
-            [self connectInternal];
-            if (self->_session.isConnected) return;
-        }
-    }];
-    _reconnectThread.name = @"dsh-ssh-reconnect";
-    [_reconnectThread start];
-}
-
-- (void)closeListen {
-    if (_listenFd >= 0) {
-        close(_listenFd);
-        _listenFd = -1;
-    }
-}
-
-- (void)closeSession {
-    for (DshSshConn *conn in _conns) {
-        [self closeConn:conn];
-    }
-    [_conns removeAllObjects];
-    [self closeListen];
-    [_session disconnect];
-    _session = nil;
-}
-
-- (int64_t)currentGeneration {
-    [_lock lock];
-    int64_t value = _generation;
+    NSString *value = [_state[@"phase"] isEqual:@"READY"] && [_state[@"localPort"] integerValue] > 0
+        ? [NSString stringWithFormat:@"http://127.0.0.1:%@", _state[@"localPort"]] : nil;
     [_lock unlock];
     return value;
 }
 
-- (NSString *)friendlyMessage:(NSString *)text {
-    NSString *lower = text.lowercaseString;
-    if ([text containsString:@"SSH_PORT_IN_USE"]) return text;
-    if ([lower containsString:@"auth"]) return @"SSH 身份验证失败，请检查用户名和私钥";
-    if ([lower containsString:@"password"] || [lower containsString:@"passphrase"]) return @"SSH 私钥口令错误";
-    if ([lower containsString:@"connect"] || [lower containsString:@"refused"]) {
-        return [NSString stringWithFormat:@"无法连接 SSH 主机：%@", text];
-    }
-    return text.length > 0 ? text : @"SSH 连接失败";
+- (void)startAttempt {
+    [self releaseAttempt];
+    DshSshAttempt *attempt = [DshSshAttempt new];
+    attempt.generation = ++_generation;
+    attempt.key = [_key mutableCopy]; attempt.passphrase = _passphrase;
+    attempt.host = _host; attempt.username = _username; attempt.port = _port; attempt.remotePort = _remotePort;
+    attempt.fingerprint = _fingerprint; attempt.session = _factory();
+    _active = attempt;
+    [self emit:@"CONNECTING" message:@"正在连接 SSH" port:0];
+    [NSThread detachNewThreadWithBlock:^{ @autoreleasepool { [self runAttempt:attempt]; } }];
 }
 
-- (void)publish:(NSDictionary *)state {
-    void (^callback)(NSDictionary *) = self.onState;
+- (BOOL)accepts:(DshSshAttempt *)attempt {
+    [_lock lock];
+    BOOL valid = _enabled && _active == attempt && _generation == attempt.generation;
+    [_lock unlock];
+    return valid;
+}
+
+- (void)runAttempt:(DshSshAttempt *)attempt {
+    BOOL retryable = NO;
+    NSString *failure = nil;
+    @try {
+        if (![self accepts:attempt]) return;
+        if (![attempt.session connectHost:attempt.host port:attempt.port]) { retryable = YES; failure = @"无法连接 SSH 主机"; return; }
+        if (![self accepts:attempt]) return;
+        NSString *offered = [attempt.session fingerprint];
+        if (offered.length == 0) { failure = @"无法读取 SSH 主机指纹"; return; }
+        if (![offered isEqual:attempt.fingerprint]) {
+            [_lock lock];
+            if ([self accepts:attempt]) {
+                _pendingFingerprint = offered;
+                _active = nil;
+                [self emit:@"FINGERPRINT_REQUIRED" message:offered port:0];
+            }
+            [_lock unlock];
+            return;
+        }
+        [self emitFor:attempt phase:@"AUTHENTICATING" message:@"正在验证 SSH 身份" port:0];
+        if (![self accepts:attempt]) return;
+        if (![attempt.session authenticateUser:attempt.username key:attempt.key passphrase:attempt.passphrase]) {
+            failure = @"SSH 身份验证失败，请检查用户名、私钥和口令"; return;
+        }
+        [attempt.key resetBytesInRange:NSMakeRange(0, attempt.key.length)];
+        attempt.passphrase = @"";
+        [self emitFor:attempt phase:@"FORWARDING" message:@"正在建立 DSH 转发" port:0];
+        if (![self accepts:attempt]) return;
+        NSInteger port = [attempt.session startForwarding];
+        if (port <= 0 || port > 65535) { failure = @"本地 SSH 转发创建失败"; return; }
+        [self emitFor:attempt phase:@"READY" message:@"SSH 已连接" port:port];
+        if (![self accepts:attempt]) return;
+        [attempt.session pumpRemotePort:attempt.remotePort];
+        retryable = YES; failure = @"SSH 连接已断开，正在重连";
+    } @catch (NSException *error) {
+        // Native exceptions may contain key material or server data; expose only a fixed message.
+        failure = @"SSH 连接失败";
+    } @finally {
+        [attempt.key resetBytesInRange:NSMakeRange(0, attempt.key.length)]; attempt.passphrase = @"";
+        @try { [attempt.session close]; } @catch (NSException *error) { failure = @"SSH 资源释放失败"; retryable = NO; }
+        [_lock lock];
+        if ([self accepts:attempt]) {
+            _active = nil;
+            [self emit:retryable ? @"RECONNECTING" : @"ERROR" message:failure ?: @"SSH 连接失败" port:0];
+            if (retryable) [self scheduleRetry:attempt.generation];
+        }
+        [_lock unlock];
+    }
+}
+
+- (void)scheduleRetry:(int64_t)generation {
+    NSArray<NSNumber *> *delays = @[@1, @2, @4, @8, @16, @30];
+    if (!_enabled || _generation != generation || _active || _retries >= delays.count) return;
+    NSTimeInterval delay = delays[_retries++].doubleValue;
+    __weak DshSshTunnel *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        DshSshTunnel *owner = weakSelf;
+        if (!owner) return;
+        [owner->_lock lock];
+        if (owner->_enabled && owner->_generation == generation && !owner->_active && [owner->_state[@"phase"] isEqual:@"RECONNECTING"]) {
+            [owner startAttempt];
+        }
+        [owner->_lock unlock];
+    });
+}
+
+- (void)emitFor:(DshSshAttempt *)attempt phase:(NSString *)phase message:(NSString *)message port:(NSInteger)port {
+    [_lock lock];
+    if ([self accepts:attempt]) { if ([phase isEqual:@"READY"]) _retries = 0; [self emit:phase message:message port:port]; }
+    [_lock unlock];
+}
+
+- (void)emit:(NSString *)phase message:(NSString *)message port:(NSInteger)port {
+    NSDictionary *state = @{ @"phase": phase, @"message": message, @"localPort": @(port), @"generation": @(_generation) };
+    _state = state;
+    void (^callback)(NSDictionary *) = _onState;
     if (!callback) return;
-    dispatch_async(dispatch_get_main_queue(), ^{ callback(state); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self->_lock lock];
+        // Suppress queued state from old attempts, stopped connections, and replaced subscriptions.
+        @try { if (self->_state == state && self->_onState == callback) callback(state); }
+        @catch (NSException *error) { NSLog(@"[DshSshTunnel] State callback failed"); }
+        @finally { [self->_lock unlock]; }
+    });
+}
+
+- (void)releaseAttempt {
+    DshSshAttempt *attempt = _active;
+    _active = nil;
+    [attempt.session cancel];
+    // The worker clears its own mutable key; never mutate it while native authentication is reading it.
+}
+
+- (void)stopResources {
+    _enabled = NO;
+    [self releaseAttempt];
+    [_key resetBytesInRange:NSMakeRange(0, _key.length)]; _key = nil;
+    _passphrase = @""; _pendingFingerprint = @"";
 }
 
 @end

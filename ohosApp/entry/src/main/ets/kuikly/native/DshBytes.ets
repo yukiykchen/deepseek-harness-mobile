@@ -5,7 +5,7 @@ export function utf8Encode(text: string): Uint8Array {
 }
 
 export function utf8Decode(bytes: Uint8Array): string {
-  return new util.TextDecoder('utf-8').decodeWithStream(bytes);
+  return util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(bytes);
 }
 
 export function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {

@@ -88,7 +88,7 @@ npx @deepseek-ai/dsh web
 
 **手机 — 安装并打开 App**
 
-Android 试用包从 [GitHub Releases](https://github.com/yukiykchen/deepseek-harness-mobile/releases) 下载 `dsh-mobile-*.apk`，在系统设置里允许未知来源后安装。给仓库打 `v*` tag（例如 `v0.0.1`）会由 GitHub Actions 自动打 Release APK。
+Android 试用包从 [GitHub Releases](https://github.com/yukiykchen/deepseek-harness-mobile/releases) 下载 `dsh-mobile-*.apk`，在系统设置里允许未知来源后安装。给仓库打 `v*` tag（例如 `v0.0.1`）会由 GitHub Actions 自动打 Release APK。发布前需配置 `DSH_RELEASE_KEYSTORE_BASE64`、`DSH_RELEASE_KEYSTORE_PASSWORD`、`DSH_RELEASE_KEY_ALIAS`、`DSH_RELEASE_KEY_PASSWORD`；未签名 APK 会被发布流程拒绝。
 
 也可以自己编：
 
@@ -367,10 +367,19 @@ androidApp/
   src/main/java/.../module/         # Android/Kuikly 原生模块
 
 shared/
-  src/commonMain/.../dsh/            # 跨平台 UI、协议、模型和本地存储接口
-  src/androidMain/.../dsh/           # Android SQLite 存储实现
-  src/iosMain/.../dsh/               # iOS 存储实现
-  src/ohosMain/.../dsh/              # OpenHarmony 存储实现
+  src/commonMain/.../
+    framework/                       # Kuikly 页面基类、通用桥接和日志
+    platform/                        # 原生模块与平台能力边界
+    model/                           # Host 协议、领域模型和纯数据转换
+    data/                            # Host RPC、事件流、时间线映射、本地存储契约
+    ui/                              # 跨页面复用的 Kuikly 组件与 Markdown
+    feature/connection/              # 连接设置页与连接生命周期
+    feature/home/                    # 聊天首页、状态 controller 与弹窗
+    feature/webview/                 # 内置网页
+  src/androidMain/.../data/          # Android SQLite 存储实现
+  src/iosMain/.../data/              # iOS 存储实现
+  src/ohosMain/.../data/             # OpenHarmony 存储与网络实现
+  src/commonTest/.../                # 按被测层归组的共享单元测试
 
 iosApp/                              # iOS 宿主工程
 ohosApp/                             # OpenHarmony 宿主工程
@@ -378,12 +387,52 @@ ohosApp/                             # OpenHarmony 宿主工程
 
 比较重要的文件：
 
-- [`DshConnectionSetupPage.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshConnectionSetupPage.kt)：启动时选择扫码 / SSH；
-- [`DshRelayManager.kt`](androidApp/src/main/java/com/example/dsh/relay/DshRelayManager.kt)：扫码配对、sealed tunnel 和本机 loopback 网关；
-- [`DshHostProtocol.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHostProtocol.kt)：App 与 Host 的 RPC 和事件协议；
-- [`DshHostClient.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHostClient.kt)：扫码 / SSH 共用的 Host 客户端；
-- [`DshHomePage.kt`](shared/src/commonMain/kotlin/com/example/dsh/dsh/DshHomePage.kt)：聊天、会话、输入框和模型配置；
-- [`DshLocalStore.android.kt`](shared/src/androidMain/kotlin/com/example/dsh/dsh/DshLocalStore.android.kt)：按连接 scope 隔离的本地数据库。
+- [`DshConnectionSetupPage.kt`](shared/src/commonMain/kotlin/io/github/yukiykchen/dsh/feature/connection/DshConnectionSetupPage.kt)：启动时选择扫码 / SSH；
+- [`DshRelayManager.kt`](androidApp/src/main/java/io/github/yukiykchen/dsh/relay/DshRelayManager.kt)：扫码配对、sealed tunnel 和本机 loopback 网关；
+- [`DshHostWireProtocol.kt`](shared/src/commonMain/kotlin/io/github/yukiykchen/dsh/model/DshHostWireProtocol.kt)：App 与 Host 的 RPC 和事件协议；
+- [`DshHostClient.kt`](shared/src/commonMain/kotlin/io/github/yukiykchen/dsh/data/DshHostClient.kt)：扫码 / SSH 共用的 Host 客户端；
+- [`DshHomePage.kt`](shared/src/commonMain/kotlin/io/github/yukiykchen/dsh/feature/home/DshHomePage.kt)：聊天、会话、输入框和模型配置；
+- [`DshLocalStore.android.kt`](shared/src/androidMain/kotlin/io/github/yukiykchen/dsh/data/DshLocalStore.android.kt)：按连接 scope 隔离的本地数据库。
+
+`shared` 的依赖方向固定为 `framework → platform / model → data / ui → feature`，各 feature 保持在自己的目录内；home 可以复用 connection 的连接 controller，反过来不允许。运行 `./gradlew verifySharedArchitecture` 会校验目录、包名与依赖方向，Release CI 也会执行该检查。
+
+生产构建默认只记录结构化诊断信息：事件类型、长度、序号、耗时和稳定错误码，不记录 prompt、模型回复、payload、凭据或问答答案。Android/iOS Debug 宿主会传入 `verboseDiagnostics=true` 以启用有限文本预览；OHOS 和 Release 宿主默认关闭。仓库中的 `keystore/preview.jks` 仅用于 Debug 本地预览；Release 启用 R8，并使用 `DSH_RELEASE_*` 私有签名配置，未配置私钥时产物保持未签名，发布流程会用 `apksigner` 阻止上传。
+
+架构检查限制手写 Kotlin、Swift、ArkTS、C/C++、Objective-C 和构建/测试脚本不得超过 1000 行，禁止 `model` / `data` 依赖 Kuikly UI 状态，并要求原生平台只保留一份共享 SQLite 实现。首页弹窗、会话区、Host 回调、历史/技能请求、实时事件展示、消息列表策略、页面导航、Host 缓存查询、常量和测试类均已按职责拆分，不保留手写超长文件白名单。Kotlin/Native 自动生成且已被 Git 忽略的 `libshared_api.h` 不属于手写代码检查范围。
+
+SQLite 的读写和关闭使用同一 FIFO 队列，异步写入保存提交时的消息快照；页面销毁先取消缓存读取，再等待已提交写入完成并关闭数据库。会话缓存的异步回调校验连接范围及消息列表身份，防止旧读取覆盖新会话。`sqliteTest` 通过真实内存数据库验证写入顺序与连接隔离，仅原生目标包含这组测试；JS 不引入 SQLite。
+
+功能控制器通过 `DshControllerRequestScope` 校验请求所属控制器、序号、Host 客户端、连接世代及会话。关闭弹窗、切换上下文或销毁页面后，旧回调不能改写新表单或释放新请求的忙碌状态；问答与队列失败保留可重试的草稿。任务计时器使用独立版本号，关闭或销毁后不再读取原生时钟。对应回归测试使用可控传输和调度器覆盖乱序响应、重连、重复提交、跳过问题及工作区重排。
+
+连接设置的异步操作由 `DshConnectionSetupController` 管理，绑定表单版本和连接模式；重复校验、重复 READY、旧探测回调、修改表单、切换模式及页面销毁均不会重复连接或跳转。Host 探测成功后才保存 SSH 配置，保存失败保持在当前页。指纹确认继续当前原生尝试，不额外创建连接。`DshSshProfileForm` 取消和销毁时回收未保存的导入密钥，保存后的密钥由配置持有；口令只在内存中传递给下一页，消费后清空路由参数，不写数据库。连接页按实际键盘高度调整滚动区域，口令输入使用密码键盘。
+
+Android Relay 的生命周期集中在 `DshRelayRuntime`，每次连接独立持有访问票请求、WebSocket、加密序号、loopback 和握手计时器。旧连接及已取消的重试不能向新隧道发送数据；配对被撤销或服务器证明验证失败时停止自动重试。loopback 限制连接数与帧大小，关闭时释放 HTTP 等待和未完成请求头读取，WebSocket 分片先拼成完整消息再转发。回归测试包含真实本地 HTTP / WebSocket 与 `sealed-tunnel-v1` 加密往返，不依赖外部 Relay。
+
+Android 配对凭据以一个 AES-GCM 记录原子替换，旧五字段只在新记录提交成功后移除。SSH 私钥的导入、读取和校验仅使用内存，不写明文临时文件；升级后清理旧版崩溃可能遗留的两类明文临时文件。密钥 ID 校验防止路径穿越，读入限制为 64 KiB。已有记录的 Keystore 密钥缺失时，读取和覆盖均不重新生成密钥。相关 JVM 测试覆盖迁移、认证失败、短输入、写入失败及并发读写。
+
+Android SSH 由 `DshSshRuntime` 管理状态，每次尝试独立拥有 `DshMinaSshConnection`、MINA 客户端、会话、认证请求、计时器和私钥副本。断开、切换配置或重连后，旧线程不能发布新端点；只有网络失败可自动重试，认证失败和主机密钥变更需用户处理。指纹确认只能接受当前实际提供的指纹。桥接模块销毁会移除订阅，开始新配置时不会重放旧配置的 READY 端点。
+
+`./gradlew :androidApp:testDebugUnitTest` 包含真实本机 SSH 认证、128 KiB 二进制转发和远端认证等待取消测试。连接 Android arm64 设备后，运行 `./gradlew :androidApp:connectedDebugAndroidTest` 验证真实 Keystore、非导出密钥、私钥内存校验及 64 KiB SSH 二进制往返；测试使用隔离的临时目录和密钥别名。模拟器验证不替代 API 24/25 真机验证。
+
+iOS Relay 同样以每次连接为资源边界：`DshRelayCore` 管理连接与配对，`DshRelayTransport` 包装 URLSession，`DshRelaySocketIO` 让描述符在最后一个读写持有者释放后才关闭，避免关闭旧连接时误伤新连接。配对凭据以单个 Keychain 记录原子更新，保留旧记录读取兼容；新回调不能恢复已移除的配对。macOS / Xcode 环境运行 `python3 scripts/test-ios-relay.py`，会先编译 iOS 14.1 arm64 原生源，再执行 Swift 回归测试和真实本机加密隧道往返；相关 PR 由独立 macOS CI 检查。该测试不等同于 iOS 真机 App、相机、Keychain 权限或本地网络权限验证。
+
+iOS SSH 拆分为 `DshSshTunnel`（状态与尝试身份）、`DshSshSession`（libssh2 连接、认证与资源所有权）和 `DshSshForwarder`（有界转发）。取消线程只执行 socket shutdown，libssh2 句柄及描述符由原工作线程释放；旧尝试、延迟重试和已替换的订阅不能发布新端点。转发最多 32 个客户端，每个方向保留 16 KiB 缓冲，跨轮询保留部分写入和 EAGAIN 状态，半关闭发送 EOF 后仍读取远端响应。DNS、连接及握手共用截止时间，认证另有截止时间。
+
+SSH 私钥选择使用 60 秒有效的一次性内存凭证，不再额外写明文临时文件；旧版 `ssh-pick-<UUID>.key` 会在初始化时清理。Keychain 写入、读取和迁移检查系统状态，失败不虚报成功，也不因权限错误回退旧服务。Swift 测试包含 7 项凭据回归。系统文件选择器的 asCopy 行为和系统自身临时文件不由 App 控制。
+
+App 已移除 NMSSH 及其捆绑的 libssh2 1.8.0。`iosApp/Podspecs/DshLibssh2.podspec` 从官方 libssh2 1.11.1 发布包构建源码，下载校验固定 SHA-256，依赖固定的 OpenSSL-Universal 3.6.2000（OpenSSL 3.6.2），保持 iOS 14.1 最低版本。Release 链接映射已确认使用 `DshLibssh2`；OpenSSL 由 CocoaPods 嵌入 App。
+
+先在 `iosApp` 运行 `pod install`，在 Python 虚拟环境安装 `scripts/requirements-ssh-tests.txt` 后执行 `python scripts/test-ios-ssh.py`。脚本使用已安装的同一 podspec、26 个 libssh2 编译单元及 OpenSSL XCFramework 的 macOS 切片，不使用 Homebrew SSH 库；iOS 编译也使用同一发布包的头文件。19 项测试覆盖依赖版本一致性、普通/加密 Ed25519 密钥、错误口令、512 KiB 慢速二进制往返、半关闭、闲置客户端并发、认证失败和取消握手。设置 `SSH_ADDRESS_SANITIZER=1` 可同时检查 App 代码和 libssh2 源码的内存访问。
+
+对已启动的模拟器运行 `python scripts/test-ios-ssh.py --simulator <UDID>`，会用 iOS Simulator 切片编译、安装隔离测试 App、运行相同 19 项回归后卸载测试 App。iOS 26.5 arm64 模拟器验证已通过；完整 iOS arm64 App 的 Debug/Release 未签名构建已通过。这些证据不等同于相机、Keychain 权限及真机运行验证。macOS CI 执行依赖安装、AddressSanitizer 回归和完整 App 构建。
+
+HarmonyOS Relay 对每个异步步骤校验连接身份，包括凭据读取、访问票、证明验证、加解密及网关启动。模块销毁会移除订阅和一次性回调槽位；配对记录整体加密后原子替换，写入提交前再次检查配对是否已取消。API 12 尚无 TCP server 关闭接口，因此整个进程复用一个 loopback 监听器，断开后释放客户端和会话并拒绝新的未绑定请求，避免重连累积端口。
+
+DevEco 环境执行 `/Applications/DevEco-Studio.app/Contents/tools/node/bin/node scripts/test-ohos-relay.cjs`，使用 SDK TypeScript 转译器运行生产 `.ets` 模块的 54 项主机侧回归测试。测试替换网络、文件及系统加密 API 边界，不是 ArkVM 或设备运行证明；实际 ArkTS 编译和 Kotlin/Native 链接需通过 Hvigor 构建。包名更换后，旧签名 profile 不再匹配 `io.github.yukiykchen.dsh`，必须在 DevEco 重新生成签名配置后才可安装。
+
+鸿蒙凭据加密、磁盘操作和迁移分别由 `DshHuksSecretCipher`、`DshRelaySecretFiles` 和 `DshRelaySecrets` 管理。新配对使用 HUKS 内生成且不导出的 AES 密钥，记录保存为 `pairing-huks.bin`。旧整体记录或五字段记录只使用已有 `kek.bin` 解密，受保护记录提交成功后才移除旧凭据和原始密钥；受保护记录认证失败或密钥缺失时不回退旧记录。迁移与写入串行化，忘记配对或新的写入会使旧提交失效。主机测试覆盖迁移失败保留旧数据、短写、取消及认证失败，HUKS 服务的真实设备行为仍需设备验证。
+
+Android 最低版本保持 API 24。SSHD 的 `java.nio.file` / `java.time` 使用 `desugar_jdk_libs_nio` 提供兼容实现；执行 `./gradlew :androidApp:lintDebug` 检查 Android API 可用性。Android 工具链使用 AGP 8.6.1 / Gradle 8.7，匹配 Kotlin 2.1 的 D8/R8 要求；Debug 和 Release 构建已验证不再出现旧工具链的 Kotlin 元数据解析警告。HarmonyOS 仍使用独立的 KBA 配置。构建成功不等同于旧设备运行验证。
 
 ## 网络和通信说明
 

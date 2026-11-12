@@ -39,10 +39,7 @@ kotlin {
 
     ohosArm64 {
         binaries.sharedLib {
-            linkerOpts(
-                "-L${rootProject.projectDir}/ohosApp/entry/libs/arm64-v8a",
-                "-lpbcurlwrapper",
-            )
+            baseName = "shared"
         }
         compilations.getByName("main").compileTaskProvider.configure {
             compilerOptions {
@@ -70,16 +67,32 @@ kotlin {
                 implementation(kotlin("test"))
             }
         }
-        val ohosArm64Main by getting
-        val ohosMain by creating {
+        val sqliteMain by creating {
             dependsOn(commonMain)
             dependencies {
                 implementation("net.shantu.kuiklysqlite:kuiklySqlite:1.0.0")
-                implementation("com.tencent.kuiklybase:network:0.0.4")
             }
+        }
+        val sqliteTest by creating {
+            dependsOn(commonTest)
+        }
+        val androidUnitTest by getting {
+            dependsOn(sqliteTest)
+            dependencies {
+                // The Android JNA AAR omits desktop natives needed by host-side SQLite tests.
+                implementation("net.java.dev.jna:jna:5.18.1@jar")
+            }
+        }
+        val ohosArm64Test by getting {
+            dependsOn(sqliteTest)
+        }
+        val ohosArm64Main by getting
+        val ohosMain by creating {
+            dependsOn(sqliteMain)
             ohosArm64Main.dependsOn(this)
         }
         val androidMain by getting {
+            dependsOn(sqliteMain)
             dependencies {
                 api("com.tencent.kuikly-open:core-render-android:${Version.getKuiklyOhosVersion()}")
             }
@@ -89,7 +102,7 @@ kotlin {
         val iosArm64Main by getting
         val iosSimulatorArm64Main by getting
         val iosMain by creating {
-            dependsOn(commonMain)
+            dependsOn(sqliteMain)
             iosX64Main.dependsOn(this)
             iosArm64Main.dependsOn(this)
             iosSimulatorArm64Main.dependsOn(this)
@@ -98,7 +111,7 @@ kotlin {
         val iosArm64Test by getting
         val iosSimulatorArm64Test by getting
         val iosTest by creating {
-            dependsOn(commonTest)
+            dependsOn(sqliteTest)
             iosX64Test.dependsOn(this)
             iosArm64Test.dependsOn(this)
             iosSimulatorArm64Test.dependsOn(this)
@@ -106,7 +119,7 @@ kotlin {
     }
 }
 
-group = "com.example.dsh"
+group = "io.github.yukiykchen.dsh"
 version = System.getenv("kuiklyBizVersion") ?: "1.0.0"
 
 publishing {
@@ -136,7 +149,7 @@ dependencies {
 }
 
 android {
-    namespace = "com.example.dsh.shared"
+    namespace = "io.github.yukiykchen.dsh.shared"
     compileSdk = 34
     defaultConfig {
         minSdk = 21
@@ -161,41 +174,4 @@ fun getCommonCompilerArgs(): List<String> {
 
 fun getLinkerArgs(): List<String> {
     return listOf()
-}
-
-val nativeLibsDir = rootProject.file("ohosApp/entry/libs/arm64-v8a")
-val pbcurlwrapperSo = nativeLibsDir.resolve("libpbcurlwrapper.so")
-val opensslSo = nativeLibsDir.resolve("libopenssl.so")
-val downloadPbcurlwrapper = tasks.register("downloadPbcurlwrapper") {
-    outputs.files(pbcurlwrapperSo, opensslSo)
-    doLast {
-        nativeLibsDir.mkdirs()
-        fun fetch(file: java.io.File, url: String, minBytes: Long) {
-            if (file.exists() && file.length() > minBytes) {
-                return
-            }
-            exec {
-                commandLine("curl", "-L", "--fail", "--retry", "3", "-o", file.absolutePath, url)
-            }
-            if (!file.exists() || file.length() < minBytes) {
-                throw GradleException("downloaded ${file.name} is too small (${file.length()} bytes)")
-            }
-        }
-        fetch(
-            pbcurlwrapperSo,
-            "https://github.com/Tencent-TDS/KuiklyBase-components/raw/master/NetworkKMM/network/libs/libpbcurlwrapper.so",
-            100_000L,
-        )
-        fetch(
-            opensslSo,
-            "https://github.com/Tencent-TDS/KuiklyBase-components/raw/master/NetworkKMM/ohosApp/pbcurlwrapper/libs/arm64-v8a/libopenssl.so",
-            1_000_000L,
-        )
-    }
-}
-
-tasks.configureEach {
-    if (name.contains("OhosArm64") && (name.startsWith("link") || name.startsWith("compileKotlin"))) {
-        dependsOn(downloadPbcurlwrapper)
-    }
 }
